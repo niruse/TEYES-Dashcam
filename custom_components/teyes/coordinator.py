@@ -77,6 +77,9 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_trip: dict[str, dict[str, Any]] = {}
         self.trip_count: dict[str, int] = {}
         self.data_usage: dict[str, dict[str, Any]] = {}
+        # Live values that only arrive over MQTT while the car is online.
+        self.signal: dict[str, Any] = {}
+        self.last_alarm: dict[str, str] = {}
         self._mqtt: dict[str, TeyesMqttClient] = {}
         super().__init__(
             hass,
@@ -324,16 +327,41 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @callback
     def _handle_message(self, device_id: str, payload: bytes) -> None:
-        """Fold a pushed car message into the coordinator's data."""
+        """Fold a pushed car message into the coordinator's data.
+
+        The car sends `{type, data}`; the type says which subsystem reported,
+        so this dispatches on it. Anything with a position (a `location`
+        message, or an untyped payload that carries one) still updates the
+        tracker as before.
+        """
         raw = parse_message(payload)
         if raw is None:
             return
         _LOGGER.debug("Car message for %s: %s", device_id, raw)
-        fresh = normalise(raw, self.coordinate_system)
-        # Keep the previous values for anything this message left out, so a
-        # partial report does not blank out the entities.
-        merged = {**self.telemetry_fields(device_id), **fresh.fields}
-        self.telemetry[device_id] = Telemetry(raw, merged)
         self.message_count[device_id] = self.message_count.get(device_id, 0) + 1
         self.last_message_at[device_id] = dt_util.utcnow().isoformat()
+
+        message_type = raw.get("type") if isinstance(raw, dict) else None
+        body = raw.get("data") if isinstance(raw, dict) else None
+        if not isinstance(body, dict):
+            body = raw
+
+        if message_type in ("tmps", "tmpsNotice"):
+            self.tpms.setdefault(device_id, {}).update(body)
+        elif message_type == "rsrp":
+            self.signal[device_id] = body.get("type", body)
+        elif message_type == "shake":
+            self.last_alarm[device_id] = dt_util.utcnow().isoformat()
+            self.hass.bus.async_fire(
+                f"{DOMAIN}_alarm", {"device_id": device_id, "kind": "shake"}
+            )
+        else:
+            # location / acc / untyped — fold any telemetry it carries in.
+            fresh = normalise(body, self.coordinate_system)
+            if message_type == "acc" and "acc" not in fresh.fields:
+                if (state := body.get("type")) in ("on", "off"):
+                    fresh.fields["acc"] = state == "on"
+            merged = {**self.telemetry_fields(device_id), **fresh.fields}
+            self.telemetry[device_id] = Telemetry(raw, merged)
+
         self.async_update_listeners()

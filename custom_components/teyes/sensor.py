@@ -255,6 +255,20 @@ SENSORS: tuple[TeyesSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda c, d: c.trip_count.get(d),
     ),
+    # ── live values pushed over MQTT while the car is online ──────────────
+    TeyesSensorDescription(
+        key="signal",
+        translation_key="signal",
+        icon="mdi:signal",
+        value_fn=lambda c, d: c.signal.get(d),
+    ),
+    TeyesSensorDescription(
+        key="last_alarm",
+        translation_key="last_alarm",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        icon="mdi:car-emergency",
+        value_fn=lambda c, d: _time(c.last_alarm.get(d)),
+    ),
     # ── SIM data plan ─────────────────────────────────────────────────────
     TeyesSensorDescription(
         key="data_remaining",

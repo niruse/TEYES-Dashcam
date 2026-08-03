@@ -93,6 +93,8 @@
       "ignition_off_since": { "name": "Ignition off since" },
       "last_trip": { "name": "Last trip" },
       "trip_count": { "name": "Recorded trips" },
+      "signal": { "name": "Signal" },
+      "last_alarm": { "name": "Last alarm" },
       "data_remaining": { "name": "Data remaining" },
       "tyre_left_front": { "name": "Tyre pressure front left" },
       "tyre_right_front": { "name": "Tyre pressure front right" },
