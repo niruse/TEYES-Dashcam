@@ -338,6 +338,16 @@ class TeyesApiClient:
         cars = data if isinstance(data, list) else [data] if data else []
         return [car for car in cars if isinstance(car, dict) and car.get("imei")]
 
+    async def async_check_app_update(self, device_id: str) -> dict[str, Any]:
+        """Whether the head unit has an app update waiting.
+
+        Returns `hasUpdate` (0/1) and `latest_version_code`.
+        """
+        data = await self.async_request(
+            "/user/checkCarAppUpdate", device_id=device_id
+        )
+        return data if isinstance(data, dict) else {}
+
 
 def _flatten(data: Any, out: dict[str, Any] | None = None) -> dict[str, Any]:
     """Collect every scalar in a nested reply under its lowercased key."""

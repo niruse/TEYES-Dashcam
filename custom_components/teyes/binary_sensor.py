@@ -15,6 +15,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import carinfo
 from .const import DOMAIN
 from .coordinator import TeyesCoordinator
 from .entity import TeyesEntity
@@ -74,6 +75,34 @@ SENSORS: tuple[TeyesBinarySensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         value_fn=lambda c, d: c.push_connected(d),
+    ),
+    TeyesBinarySensorDescription(
+        key="sim_present",
+        translation_key="sim_present",
+        device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda c, d: carinfo.flag(c.car(d), "sim"),
+    ),
+    TeyesBinarySensorDescription(
+        key="privacy_mode",
+        translation_key="privacy_mode",
+        icon="mdi:eye-off",
+        value_fn=lambda c, d: carinfo.flag(c.car(d), "isprivacymode"),
+    ),
+    TeyesBinarySensorDescription(
+        key="update_available",
+        translation_key="update_available",
+        device_class=BinarySensorDeviceClass.UPDATE,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda c, d: c.update_waiting(d),
+    ),
+    TeyesBinarySensorDescription(
+        key="geofence_enabled",
+        translation_key="geofence_enabled",
+        icon="mdi:map-marker-radius",
+        value_fn=lambda c, d: carinfo.geofence(c.car(d))["enabled"]
+        if c.car(d)
+        else None,
     ),
     TeyesBinarySensorDescription(
         key="camera",

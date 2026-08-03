@@ -37,6 +37,9 @@ from .telemetry import Telemetry, normalise, parse_location_field, parse_message
 
 _LOGGER = logging.getLogger(__name__)
 
+# Poll the app-update flag every Nth refresh (~hourly at the default interval).
+_UPDATE_EVERY = 60
+
 
 class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Polls one Teyes account and folds in the pushed telemetry per car."""
@@ -59,6 +62,10 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.telemetry: dict[str, Telemetry] = {}
         self.last_message_at: dict[str, str] = {}
         self.message_count: dict[str, int] = {}
+        # Whether an app update is waiting, per car; read only occasionally
+        # since it rarely changes.
+        self.app_update: dict[str, dict[str, Any]] = {}
+        self._update_checks = 0
         self._mqtt: dict[str, TeyesMqttClient] = {}
         super().__init__(
             hass,
@@ -94,6 +101,13 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         client = self._mqtt.get(device_id)
         return bool(client and client.connected)
 
+    def update_waiting(self, device_id: str) -> bool | None:
+        """Whether the head unit has an app update waiting."""
+        info = self.app_update.get(device_id)
+        if not info or "hasUpdate" not in info:
+            return None
+        return bool(info.get("hasUpdate"))
+
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             cars = await self.client.async_get_cars()
@@ -117,7 +131,25 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except TeyesError as err:
                 _LOGGER.debug("getCarMqState failed for %s: %s", device_id, err)
             self._apply_parked_location(device_id)
+
+        # The app-update flag rarely changes, so check it roughly hourly
+        # rather than on every poll.
+        if self._update_checks % _UPDATE_EVERY == 0:
+            await self._async_refresh_app_update()
+        self._update_checks += 1
         return {"cars": self.cars, "states": self.states}
+
+    async def _async_refresh_app_update(self) -> None:
+        """Read the app-update flag for each selected car; failures are quiet."""
+        for device_id in self.selected:
+            if device_id not in self.cars:
+                continue
+            try:
+                self.app_update[device_id] = await self.client.async_check_app_update(
+                    device_id
+                )
+            except TeyesError as err:
+                _LOGGER.debug("checkCarAppUpdate failed for %s: %s", device_id, err)
 
     def _apply_parked_location(self, device_id: str) -> None:
         """Seed a car's telemetry from its parked position in `selectCar`.

@@ -75,6 +75,10 @@
       "online": { "name": "Online" },
       "ignition": { "name": "Ignition" },
       "push_connected": { "name": "Live connection" },
+      "sim_present": { "name": "SIM" },
+      "privacy_mode": { "name": "Privacy mode" },
+      "update_available": { "name": "Update available" },
+      "geofence_enabled": { "name": "Geofence" },
       "camera": { "name": "Camera fitted" },
       "surround_view": { "name": "Surround view fitted" }
     },
@@ -87,6 +91,21 @@
       "voltage": { "name": "Voltage" },
       "gps_time": { "name": "Position time" },
       "ignition_off_since": { "name": "Ignition off since" },
+      "subscription_expiry": { "name": "Subscription expiry" },
+      "cameras": { "name": "Cameras" },
+      "geofence": {
+        "name": "Geofence status",
+        "state": {
+          "off": "Off",
+          "scope": "Radius",
+          "region": "Area",
+          "scope_and_region": "Radius and area"
+        }
+      },
+      "bound_since": { "name": "Paired since" },
+      "firmware_version": { "name": "Firmware version" },
+      "mcu_version": { "name": "MCU version" },
+      "app_version": { "name": "App version" },
       "last_report": { "name": "Last report" },
       "last_message": { "name": "Last car message" }
     }

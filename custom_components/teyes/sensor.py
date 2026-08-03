@@ -24,6 +24,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
+from . import carinfo
 from .const import DOMAIN
 from .coordinator import TeyesCoordinator
 from .entity import TeyesEntity
@@ -47,6 +48,19 @@ def _epoch_ms(value: Any) -> datetime | None:
 
 def _telemetry(key: str) -> Callable[[TeyesCoordinator, str], Any]:
     return lambda c, d: c.telemetry_fields(d).get(key)
+
+
+def _geofence_state(coordinator: TeyesCoordinator, device_id: str) -> str | None:
+    """A one-word summary of the electronic fence."""
+    car = coordinator.car(device_id)
+    if not car:
+        return None
+    fence = carinfo.geofence(car)
+    if not fence["enabled"]:
+        return "off"
+    if fence["scope_enabled"] and fence["region_enabled"]:
+        return "scope_and_region"
+    return "scope" if fence["scope_enabled"] else "region"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -129,6 +143,66 @@ SENSORS: tuple[TeyesSensorDescription, ...] = (
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda c, d: _time(c.last_message_at.get(d)),
+    ),
+    # ── details from the account's own car record ─────────────────────────
+    TeyesSensorDescription(
+        key="subscription_expiry",
+        translation_key="subscription_expiry",
+        device_class=SensorDeviceClass.DATE,
+        value_fn=lambda c, d: carinfo.validity_date(c.car(d)),
+    ),
+    TeyesSensorDescription(
+        key="cameras",
+        translation_key="cameras",
+        icon="mdi:cctv",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda c, d: len(carinfo.cameras(c.car(d))) or None,
+        attributes_fn=lambda c, d: {"cameras": carinfo.cameras(c.car(d))},
+    ),
+    TeyesSensorDescription(
+        key="geofence",
+        translation_key="geofence",
+        icon="mdi:map-marker-radius",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda c, d: _geofence_state(c, d),
+        attributes_fn=lambda c, d: carinfo.geofence(c.car(d)) if c.car(d) else {},
+    ),
+    TeyesSensorDescription(
+        key="bound_since",
+        translation_key="bound_since",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda c, d: carinfo.epoch(c.car(d), "bindtime"),
+    ),
+    TeyesSensorDescription(
+        key="firmware_version",
+        translation_key="firmware_version",
+        icon="mdi:chip",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda c, d: carinfo.text(c.car(d), "version"),
+    ),
+    TeyesSensorDescription(
+        key="mcu_version",
+        translation_key="mcu_version",
+        icon="mdi:chip",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda c, d: carinfo.text(c.car(d), "mcu"),
+    ),
+    TeyesSensorDescription(
+        key="app_version",
+        translation_key="app_version",
+        icon="mdi:cellphone-cog",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda c, d: carinfo.text(c.car(d), "app_version_name"),
+        attributes_fn=lambda c, d: {
+            "latest_version_code": (c.app_update.get(d) or {}).get(
+                "latest_version_code"
+            ),
+        },
     ),
     # The payload the car pushes is not documented, so this keeps the whole of
     # the last one where it can be read: the state counts the values that were

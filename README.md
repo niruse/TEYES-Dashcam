@@ -22,9 +22,16 @@ scross 2014 Milana"), with:
 | `device_tracker.<car>` | Where the car is — its parked position even while off |
 | `binary_sensor.<car>_online` | Whether the head unit is talking to the cloud |
 | `binary_sensor.<car>_ignition` | ACC on/off |
+| `binary_sensor.<car>_sim` | Whether a SIM is present |
+| `binary_sensor.<car>_privacy_mode` | Privacy mode on/off |
+| `binary_sensor.<car>_update_available` | An app update is waiting on the unit |
+| `binary_sensor.<car>_geofence` | Whether an electronic fence is set |
 | `sensor.<car>_speed` | Speed, while the car is reporting |
 | `sensor.<car>_heading` | Direction of travel |
 | `sensor.<car>_ignition_off_since` | When the ignition was last switched off |
+| `sensor.<car>_subscription_expiry` | When the cloud service expires |
+| `sensor.<car>_cameras` | How many cameras are fitted (with the list) |
+| `sensor.<car>_geofence_status` | Off / radius / area |
 | `sensor.<car>_position_time` | Timestamp on the last GPS fix |
 | `sensor.<car>_last_report` | When the last live message arrived |
 
@@ -33,7 +40,8 @@ works without waiting for the car to come online. Altitude, satellites,
 mileage and voltage entities exist too, disabled by default: whether the head
 unit sends them is not yet known, so they are there to switch on once a car
 has been seen reporting. Diagnostic entities cover the live connection, the
-fitted-camera flags, and the raw last message.
+firmware / MCU / app versions, when the car was paired, and the raw last
+message.
 
 ## Requirements
 
@@ -118,15 +126,22 @@ to listen are implemented here. The client id is `app_<device id>`, the
 username is the device id and the password is the `apikey` from that `server`
 block; the car publishes on `carinfo_<device id>`.
 
-## Known gaps
+## Extending it — the features that need the car online
+
+Live telemetry, remote control (radio, wallpaper), and any video ride paths
+whose shapes are only visible while the head unit is actually online. Until a
+car has been seen online, those cannot be built from guesswork. The
+[`tools/`](tools) folder has a capture script and a short recipe for recording
+what the car sends, so each becomes a real entity from real data.
 
 - **The shape of the live message is not documented.** The parser looks for the
   field names these platforms normally use (`lat`/`lng`/`speed`/`direction` and
   a dozen variants, including fixed-point integers) and keeps the whole raw
   message in the `Last car message` diagnostic entity and in the integration's
-  diagnostics download. If your car reports something the parser misses, that
-  download is exactly what is needed to add it.
+  diagnostics download. `tools/capture.py` records it directly.
+- **No controls yet** (wallpaper, radio). The cloud-side lists work
+  (`radio/list`, `wallpaper/token`), but the methods that act on the car are
+  obfuscated in the app bundle and only appear in live traffic. Capture them as
+  in [`tools/README.md`](tools/README.md), then drive them with `teyes.api_call`.
 - **No video.** Whether a CC4 Pro exposes any stream remotely is still an open
-  question; it may be local-only.
-- **No controls yet** (wallpaper, radio). Those endpoints exist but their
-  method names are obfuscated — `teyes.api_call` is how they get found.
+  question; it may be local-only. `tools/README.md` says what to look for.
