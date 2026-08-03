@@ -1,0 +1,124 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Teyes",
+        "description": "Choose how to connect to your Teyes account.",
+        "menu_options": {
+          "credentials": "Email and password",
+          "token": "Session token (advanced)"
+        }
+      },
+      "credentials": {
+        "title": "Teyes account",
+        "description": "Sign in with the account you use on the Teyes portal.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "token": {
+        "title": "Session token",
+        "description": "Open the Teyes portal in a signed-in browser and read localStorage on online.teyes.cn: ucenterToken, uid and imei.",
+        "data": {
+          "token": "Session token (ucenterToken)",
+          "uid": "Account id (uid)",
+          "device_id": "Device id (imei)"
+        }
+      },
+      "device": {
+        "title": "Car",
+        "description": "The device id of the head unit, shown as imei in the portal.",
+        "data": {
+          "device_id": "Device id"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in again",
+        "description": "The session for {email} expired.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the Teyes cloud.",
+      "invalid_auth": "Teyes rejected those credentials.",
+      "unknown_device": "Teyes did not recognise that device id for this account.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "That car is already set up.",
+      "reauth_successful": "Signed in again."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Teyes options",
+        "data": {
+          "scan_interval": "Polling interval (seconds)",
+          "enable_push": "Listen for live reports from the car",
+          "coordinate_system": "Coordinate system the car reports in"
+        },
+        "data_description": {
+          "enable_push": "Keeps a socket open to the Teyes cloud so position and speed arrive as the car sends them.",
+          "coordinate_system": "Leave on WGS-84 unless the car's position shows up a few hundred metres off inside China."
+        }
+      }
+    }
+  },
+  "selector": {
+    "coordinate_system": {
+      "options": {
+        "wgs84": "WGS-84 (worldwide)",
+        "gcj02": "GCJ-02 (China)"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "online": { "name": "Online" },
+      "ignition": { "name": "Ignition" },
+      "push_connected": { "name": "Live connection" },
+      "camera": { "name": "Camera fitted" },
+      "surround_view": { "name": "Surround view fitted" }
+    },
+    "sensor": {
+      "speed": { "name": "Speed" },
+      "heading": { "name": "Heading" },
+      "altitude": { "name": "Altitude" },
+      "satellites": { "name": "Satellites" },
+      "mileage": { "name": "Mileage" },
+      "voltage": { "name": "Voltage" },
+      "gps_time": { "name": "Position time" },
+      "ignition_off_since": { "name": "Ignition off since" },
+      "last_report": { "name": "Last report" },
+      "last_message": { "name": "Last car message" }
+    }
+  },
+  "services": {
+    "api_call": {
+      "name": "Call the Teyes API",
+      "description": "Send a request to any Teyes endpoint and return the decoded reply. Useful for trying endpoints this integration does not cover yet.",
+      "fields": {
+        "entry_id": {
+          "name": "Account",
+          "description": "Which configured account to use. Defaults to the only one."
+        },
+        "api": {
+          "name": "API",
+          "description": "client is the account API (clientv3). The rest are the car API hosts this account was given: car, track, acc, msg, file, update, ef, tmps."
+        },
+        "path": {
+          "name": "Path",
+          "description": "Endpoint path, for example /user/getCarMqState."
+        },
+        "params": {
+          "name": "Parameters",
+          "description": "Extra parameters. uid, imei, token, language and timezone are added automatically."
+        }
+      }
+    }
+  }
+}

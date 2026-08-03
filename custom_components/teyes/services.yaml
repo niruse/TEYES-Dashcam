@@ -1,0 +1,33 @@
+api_call:
+  fields:
+    entry_id:
+      required: false
+      example: 0123456789abcdef0123456789abcdef
+      selector:
+        config_entry:
+          integration: teyes
+    api:
+      required: false
+      default: client
+      selector:
+        select:
+          options:
+            - client
+            - car
+            - track
+            - acc
+            - msg
+            - file
+            - update
+            - ef
+            - tmps
+    path:
+      required: true
+      example: /user/getCarMqState
+      selector:
+        text:
+    params:
+      required: false
+      example: '{"page": 1}'
+      selector:
+        object:
