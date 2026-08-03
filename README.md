@@ -55,23 +55,10 @@ Then go to *Settings → Devices & services → Add integration → Teyes*.
 
 ## Setting it up
 
-There are two ways in. Either way, your cars are discovered automatically —
-you never type a device id — and if the account has more than one car you tick
-the ones to add.
-
-**Email and password** — the account you use on the Teyes portal. Home
-Assistant keeps the session and renews it on its own when it expires.
-
-**Session token (advanced)** — for when the portal itself is unreachable but
-the API behind it is still up, which does happen. Sign in to
-`https://online.teyes.cn` in a browser, open the developer console and read:
-
-```js
-localStorage.getItem('ucenterToken')   // the session token
-localStorage.getItem('uid')            // the account id, e.g. email12345
-```
-
-A token lasts a few days; when it expires Home Assistant asks for a new one.
+Sign in with the **email and password** of the account you use on the Teyes
+portal. Home Assistant keeps the session and renews it on its own when it
+expires. Your cars are discovered automatically — you never type a device id —
+and if the account has more than one car you tick the ones to add.
 
 > **A warning about that portal:** it also stores `ucenterLoginPassword` — your
 > account password — in `localStorage`. Do not tick "remember me", and do not

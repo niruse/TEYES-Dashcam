@@ -93,10 +93,8 @@ class TeyesConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Ask which way the account should be connected."""
-        return self.async_show_menu(
-            step_id="user", menu_options=["credentials", "token"]
-        )
+        """Start setup at the email and password form."""
+        return await self.async_step_credentials(user_input)
 
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
