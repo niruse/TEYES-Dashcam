@@ -34,7 +34,7 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_public_key,
 )
 
-from .const import CLIENT_API, TEYES_PRIVATE_KEY, TEYES_PUBLIC_KEY
+from .const import CLIENT_API, DATA_API, TEYES_PRIVATE_KEY, TEYES_PUBLIC_KEY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -346,6 +346,161 @@ class TeyesApiClient:
         data = await self.async_request(
             "/user/checkCarAppUpdate", device_id=device_id
         )
+        return data if isinstance(data, dict) else {}
+
+    # ── trips ─────────────────────────────────────────────────────────────
+
+    async def async_get_trips(
+        self, device_id: str, *, page: int = 1, size: int = 20
+    ) -> dict[str, Any]:
+        """A page of the car's recorded trips (newest first).
+
+        Returns the paginator `{total, per_page, current_page, last_page,
+        data:[…]}`; each trip has `id`, `stime`, `etime`, `date`, `zlc`
+        (distance) and a `file` of the recorded path.
+        """
+        data = await self.async_request(
+            "/track/list", {"imei": device_id, "page": page, "pagesize": size},
+            device_id=device_id,
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def async_get_trip(self, trip_id: Any) -> dict[str, Any]:
+        """One trip in full, including its `path` of points."""
+        data = await self.async_request("/track/getData", {"id": trip_id})
+        return data if isinstance(data, dict) else {}
+
+    # ── tyre pressure ─────────────────────────────────────────────────────
+
+    async def async_get_tpms(self, device_id: str) -> dict[str, Any]:
+        """The four tyres' pressure and temperature.
+
+        Each position (`leftTop`, `rightTop`, `leftBottom`, `rightBottom`)
+        carries `press`, `temp`, `alert_flag`, `connect_state` and the unit
+        codes. A value of `__` means that tyre has no sensor reporting.
+        """
+        data = await self.async_request(
+            "/tmps/getData", {"imei": device_id}, device_id=device_id
+        )
+        return data if isinstance(data, dict) else {}
+
+    # ── events / sentry ───────────────────────────────────────────────────
+
+    async def async_get_events(
+        self, device_id: str, *, page: int = 1, size: int = 20
+    ) -> dict[str, Any]:
+        """A page of sentry / alarm events for the car."""
+        data = await self.async_request(
+            "/user/sentryList", {"imei": device_id, "page": page, "pagesize": size},
+            device_id=device_id,
+        )
+        return data if isinstance(data, dict) else {}
+
+    # ── geofences (electronic fence) ──────────────────────────────────────
+
+    async def async_get_geofences(
+        self, device_id: str, *, page: int = 1, size: int = 50
+    ) -> dict[str, Any]:
+        """List the car's geofences."""
+        data = await self.async_request(
+            "/user/efList", {"imei": device_id, "page": page, "pagesize": size},
+            device_id=device_id,
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def async_set_geofence(
+        self,
+        device_id: str,
+        *,
+        scope_status: str = "hidden",
+        scope_position: str | None = None,
+        scope_range: float | None = None,
+        region_status: str = "hidden",
+        region_position: str | None = None,
+    ) -> None:
+        """Create, update or disable a geofence.
+
+        A circular fence sets `scope_position` (`lat,lng`) with `scope_range`
+        (metres) and `scope_status` != "hidden"; a polygon sets
+        `region_position` with `region_status`. "hidden" turns a side off.
+        """
+        params: dict[str, Any] = {
+            "imei": device_id,
+            "ef_scope_status": scope_status,
+            "ef_region_status": region_status,
+        }
+        if scope_position is not None:
+            params["ef_scope_postion"] = scope_position
+        if scope_range is not None:
+            params["ef_scope_range"] = scope_range
+        if region_position is not None:
+            params["ef_region_postion"] = region_position
+        await self.async_request("/user/efStatus", params, device_id=device_id)
+
+    async def async_delete_geofences(self, device_id: str, ids: str) -> None:
+        """Delete one or more geofences by comma-separated id."""
+        await self.async_request(
+            "/user/deleefList", {"imei": device_id, "no_ids": ids},
+            device_id=device_id,
+        )
+
+    # ── navigation ────────────────────────────────────────────────────────
+
+    async def async_send_address(
+        self, device_id: str, address: str, map_app: str
+    ) -> None:
+        """Send a destination to the car, to open in the chosen map app.
+
+        `map_app` is one of google, yandex, waze, gis. `address` is a place
+        name or `lat,lng`. The head unit opens it when it is online.
+        """
+        await self.async_request(
+            "/user/sendAddress",
+            {"imei": device_id, "address": address, "pagename": map_app},
+            device_id=device_id,
+        )
+
+    # ── SIM / mobile data ─────────────────────────────────────────────────
+
+    async def async_set_stealth(self, car_id: Any, hidden: bool) -> None:
+        """Hide or show the car (stealth mode)."""
+        await self.async_request(
+            "/user/changSmStatus",
+            {"id": car_id, "sm_status": "hidden" if hidden else "normal"},
+        )
+
+    async def async_close_4g(self, device_id: str, client_id: str) -> None:
+        """Ask the cloud to disable the car's mobile data."""
+        await self.async_request(
+            "/user/close4g",
+            {"uid": self.uid, "imei": device_id, "clientid": client_id},
+            device_id=device_id,
+        )
+
+    async def async_get_data_usage(self, iccid: str) -> dict[str, Any]:
+        """The SIM's data-plan usage, from the plain data-plan host.
+
+        Returns the raw `{success, data, errorMessage, payurl, payinfo}`; not
+        every SIM is registered there, in which case `success` is "false".
+        """
+        boundary = "----teyes" + str(id(iccid))
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="iccid"\r\n\r\n'
+            f"{iccid}\r\n--{boundary}--\r\n"
+        ).encode()
+        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        try:
+            async with self._session.post(
+                f"{DATA_API}/getDatamb", data=body, headers=headers, timeout=_TIMEOUT
+            ) as resp:
+                resp.raise_for_status()
+                envelope = json.loads(await resp.text())
+        except asyncio.TimeoutError as err:
+            raise TeyesConnectionError("data-usage request timed out") from err
+        except (aiohttp.ClientError, ValueError) as err:
+            raise TeyesConnectionError(f"data-usage request failed: {err}") from err
+        data = envelope.get("data") if isinstance(envelope, dict) else None
         return data if isinstance(data, dict) else {}
 
 

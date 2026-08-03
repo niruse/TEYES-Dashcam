@@ -35,6 +35,40 @@ def _time(value: Any) -> datetime | None:
     return dt_util.parse_datetime(value) if isinstance(value, str) else None
 
 
+def _num(value: Any) -> float | None:
+    """A tyre value, or None for the `__` the cloud sends when unreported."""
+    if value in (None, "", "__"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _trip_end(trip: dict[str, Any]) -> datetime | None:
+    """Combine a trip's `date` (dd.mm.yyyy) and `etime` (HH:MM:SS)."""
+    date, etime = trip.get("date"), trip.get("etime")
+    if not date or not etime:
+        return None
+    try:
+        naive = datetime.strptime(f"{date} {etime}", "%d.%m.%Y %H:%M:%S")
+    except ValueError:
+        return None
+    return naive.replace(tzinfo=dt_util.now().tzinfo)
+
+
+def _trip_attributes(coordinator: TeyesCoordinator, device_id: str) -> dict[str, Any]:
+    trip = coordinator.last_trip.get(device_id) or {}
+    return {
+        "trip_id": trip.get("id"),
+        "start": trip.get("stime"),
+        "end": trip.get("etime"),
+        "date": trip.get("date"),
+        "distance_km": _num(trip.get("zlc")),
+        "path_file": trip.get("file"),
+    }
+
+
 def _epoch_ms(value: Any) -> datetime | None:
     """Read one of the millisecond stamps the car state carries."""
     try:
@@ -204,6 +238,36 @@ SENSORS: tuple[TeyesSensorDescription, ...] = (
             ),
         },
     ),
+    # ── trips ─────────────────────────────────────────────────────────────
+    TeyesSensorDescription(
+        key="last_trip",
+        translation_key="last_trip",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        icon="mdi:map-marker-path",
+        value_fn=lambda c, d: _trip_end(c.last_trip.get(d) or {}),
+        attributes_fn=_trip_attributes,
+    ),
+    TeyesSensorDescription(
+        key="trip_count",
+        translation_key="trip_count",
+        icon="mdi:road-variant",
+        state_class=SensorStateClass.TOTAL,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda c, d: c.trip_count.get(d),
+    ),
+    # ── SIM data plan ─────────────────────────────────────────────────────
+    TeyesSensorDescription(
+        key="data_remaining",
+        translation_key="data_remaining",
+        icon="mdi:sim",
+        entity_registry_enabled_default=False,
+        value_fn=lambda c, d: _num((c.data_usage.get(d) or {}).get("usableFlowAll")),
+        attributes_fn=lambda c, d: {
+            k: v
+            for k, v in (c.data_usage.get(d) or {}).items()
+            if k not in ("usableFlowAll",)
+        },
+    ),
     # The payload the car pushes is not documented, so this keeps the whole of
     # the last one where it can be read: the state counts the values that were
     # understood and the attributes hold the message itself.
@@ -223,6 +287,33 @@ SENSORS: tuple[TeyesSensorDescription, ...] = (
 )
 
 
+# One pressure sensor per tyre. The unit the cloud uses is a code, not a known
+# unit, so the raw value is the state and the unit code sits in the attributes.
+_TYRE_SLUGS = {
+    "leftTop": "left_front",
+    "rightTop": "right_front",
+    "leftBottom": "left_rear",
+    "rightBottom": "right_rear",
+}
+TYRE_SENSORS: tuple[TeyesSensorDescription, ...] = tuple(
+    TeyesSensorDescription(
+        key=f"tyre_{slug}",
+        translation_key=f"tyre_{slug}",
+        icon="mdi:car-tire-alert",
+        entity_registry_enabled_default=False,
+        value_fn=lambda c, d, p=pos: _num(c.tyre(d, p).get("press")),
+        attributes_fn=lambda c, d, p=pos: {
+            "temperature": _num(c.tyre(d, p).get("temp")),
+            "alert": bool(c.tyre(d, p).get("alert_flag")),
+            "connected": str(c.tyre(d, p).get("connect_state")) == "1",
+            "pressure_unit_code": c.tyre(d, p).get("press_unit"),
+            "temperature_unit_code": c.tyre(d, p).get("temp_unit"),
+        },
+    )
+    for pos, slug in _TYRE_SLUGS.items()
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -231,7 +322,7 @@ async def async_setup_entry(
     async_add_entities(
         TeyesSensor(coordinator, device_id, description)
         for device_id in coordinator.selected
-        for description in SENSORS
+        for description in (*SENSORS, *TYRE_SENSORS)
     )
 
 

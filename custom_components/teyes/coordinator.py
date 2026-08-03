@@ -71,6 +71,12 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # since it rarely changes.
         self.app_update: dict[str, dict[str, Any]] = {}
         self._update_checks = 0
+        # Per car: the four tyres' latest reading, the most recent trip, and
+        # the SIM's data-plan usage.
+        self.tpms: dict[str, dict[str, Any]] = {}
+        self.last_trip: dict[str, dict[str, Any]] = {}
+        self.trip_count: dict[str, int] = {}
+        self.data_usage: dict[str, dict[str, Any]] = {}
         self._mqtt: dict[str, TeyesMqttClient] = {}
         super().__init__(
             hass,
@@ -112,6 +118,11 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not info or "hasUpdate" not in info:
             return None
         return bool(info.get("hasUpdate"))
+
+    def tyre(self, device_id: str, position: str) -> dict[str, Any]:
+        """One tyre's latest reading."""
+        value = (self.tpms.get(device_id) or {}).get(position)
+        return value if isinstance(value, dict) else {}
 
     def is_online(self, device_id: str) -> bool:
         """Whether the head unit is reachable, from either source."""
@@ -166,13 +177,46 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except TeyesError as err:
                 _LOGGER.debug("getCarMqState failed for %s: %s", device_id, err)
             self._apply_parked_location(device_id)
+            await self._async_refresh_car_extras(device_id)
 
-        # The app-update flag rarely changes, so check it roughly hourly
-        # rather than on every poll.
+        # The app-update flag and data usage rarely change, so check them
+        # roughly hourly rather than on every poll.
         if self._update_checks % _UPDATE_EVERY == 0:
             await self._async_refresh_app_update()
+            await self._async_refresh_data_usage()
         self._update_checks += 1
         return {"cars": self.cars, "states": self.states}
+
+    async def _async_refresh_car_extras(self, device_id: str) -> None:
+        """Read the per-car extras that change with use: tyres and trips."""
+        try:
+            self.tpms[device_id] = await self.client.async_get_tpms(device_id)
+        except TeyesError as err:
+            _LOGGER.debug("tmps failed for %s: %s", device_id, err)
+        try:
+            trips = await self.client.async_get_trips(device_id, size=1)
+        except TeyesError as err:
+            _LOGGER.debug("track/list failed for %s: %s", device_id, err)
+        else:
+            rows = trips.get("data") if isinstance(trips, dict) else None
+            if isinstance(rows, list) and rows:
+                self.last_trip[device_id] = rows[0]
+            self.trip_count[device_id] = (
+                trips.get("total") if isinstance(trips, dict) else None
+            ) or 0
+
+    async def _async_refresh_data_usage(self) -> None:
+        """Read the SIM data plan for each car that has an iccid."""
+        for device_id in self.selected:
+            iccid = self.car(device_id).get("iccid")
+            if not iccid:
+                continue
+            try:
+                self.data_usage[device_id] = await self.client.async_get_data_usage(
+                    str(iccid)
+                )
+            except TeyesError as err:
+                _LOGGER.debug("data usage failed for %s: %s", device_id, err)
 
     async def _async_refresh_app_update(self) -> None:
         """Read the app-update flag for each selected car; failures are quiet."""

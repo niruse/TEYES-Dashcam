@@ -91,6 +91,13 @@
       "voltage": { "name": "Voltage" },
       "gps_time": { "name": "Position time" },
       "ignition_off_since": { "name": "Ignition off since" },
+      "last_trip": { "name": "Last trip" },
+      "trip_count": { "name": "Recorded trips" },
+      "data_remaining": { "name": "Data remaining" },
+      "tyre_left_front": { "name": "Tyre pressure front left" },
+      "tyre_right_front": { "name": "Tyre pressure front right" },
+      "tyre_left_rear": { "name": "Tyre pressure rear left" },
+      "tyre_right_rear": { "name": "Tyre pressure rear right" },
       "subscription_expiry": { "name": "Subscription expiry" },
       "cameras": { "name": "Cameras" },
       "geofence": {
@@ -113,7 +120,11 @@
       "screen": { "name": "Screen" }
     },
     "button": {
-      "locate": { "name": "Update location" }
+      "locate": { "name": "Update location" },
+      "disable_4g": { "name": "Disable mobile data" }
+    },
+    "switch": {
+      "stealth_mode": { "name": "Stealth mode" }
     }
   },
   "services": {
@@ -163,6 +174,62 @@
           "name": "Message",
           "description": "The command's payload, if it needs one. Defaults to empty."
         }
+      }
+    },
+    "get_trips": {
+      "name": "Get recent trips",
+      "description": "Return the car's recorded trips, newest first.",
+      "fields": {
+        "entry_id": { "name": "Account", "description": "Which account. Defaults to the only one." },
+        "device_id": { "name": "Car", "description": "Device id (imei). Defaults to the first car." },
+        "count": { "name": "How many", "description": "Number of trips to return." }
+      }
+    },
+    "get_events": {
+      "name": "Get recent events",
+      "description": "Return the car's sentry / alarm events, newest first.",
+      "fields": {
+        "entry_id": { "name": "Account", "description": "Which account. Defaults to the only one." },
+        "device_id": { "name": "Car", "description": "Device id (imei). Defaults to the first car." },
+        "count": { "name": "How many", "description": "Number of events to return." }
+      }
+    },
+    "list_geofences": {
+      "name": "List geofences",
+      "description": "Return the car's geofences.",
+      "fields": {
+        "entry_id": { "name": "Account", "description": "Which account. Defaults to the only one." },
+        "device_id": { "name": "Car", "description": "Device id (imei). Defaults to the first car." }
+      }
+    },
+    "set_geofence": {
+      "name": "Set a geofence",
+      "description": "Create or update a circular geofence around a point.",
+      "fields": {
+        "entry_id": { "name": "Account", "description": "Which account. Defaults to the only one." },
+        "device_id": { "name": "Car", "description": "Device id (imei). Defaults to the first car." },
+        "latitude": { "name": "Latitude", "description": "Centre latitude." },
+        "longitude": { "name": "Longitude", "description": "Centre longitude." },
+        "radius": { "name": "Radius", "description": "Radius in metres." }
+      }
+    },
+    "delete_geofence": {
+      "name": "Delete geofences",
+      "description": "Delete one or more geofences by id (from list_geofences).",
+      "fields": {
+        "entry_id": { "name": "Account", "description": "Which account. Defaults to the only one." },
+        "device_id": { "name": "Car", "description": "Device id (imei). Defaults to the first car." },
+        "ids": { "name": "Ids", "description": "Comma-separated geofence ids." }
+      }
+    },
+    "send_navigation": {
+      "name": "Send navigation",
+      "description": "Send a destination to the car, to open in a map app when it is online.",
+      "fields": {
+        "entry_id": { "name": "Account", "description": "Which account. Defaults to the only one." },
+        "device_id": { "name": "Car", "description": "Device id (imei). Defaults to the first car." },
+        "address": { "name": "Address", "description": "Place name or 'lat,lng'." },
+        "map_app": { "name": "Map app", "description": "google, yandex, waze or gis." }
       }
     }
   }

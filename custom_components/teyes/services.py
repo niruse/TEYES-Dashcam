@@ -20,8 +20,15 @@ from .const import (
     CAR_API,
     CLIENT_API,
     DOMAIN,
+    NAV_APPS,
     SERVICE_API_CALL,
+    SERVICE_DELETE_GEOFENCE,
+    SERVICE_GET_EVENTS,
+    SERVICE_GET_TRIPS,
+    SERVICE_LIST_GEOFENCES,
     SERVICE_SEND_COMMAND,
+    SERVICE_SEND_NAVIGATION,
+    SERVICE_SET_GEOFENCE,
 )
 from .coordinator import TeyesCommandError, TeyesCoordinator
 
@@ -46,6 +53,34 @@ SEND_COMMAND_SCHEMA = vol.Schema(
         vol.Optional("device_id"): cv.string,
         vol.Required("command"): cv.string,
         vol.Optional("message", default={}): dict,
+    }
+)
+
+_TARGET = {
+    vol.Optional("entry_id"): cv.string,
+    vol.Optional("device_id"): cv.string,
+}
+PAGE_SCHEMA = vol.Schema(
+    {
+        **_TARGET,
+        vol.Optional("count", default=20): vol.All(vol.Coerce(int), vol.Range(1, 200)),
+    }
+)
+LIST_GEOFENCES_SCHEMA = vol.Schema(_TARGET)
+SET_GEOFENCE_SCHEMA = vol.Schema(
+    {
+        **_TARGET,
+        vol.Required("latitude"): vol.Coerce(float),
+        vol.Required("longitude"): vol.Coerce(float),
+        vol.Required("radius"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+    }
+)
+DELETE_GEOFENCE_SCHEMA = vol.Schema({**_TARGET, vol.Required("ids"): cv.string})
+SEND_NAVIGATION_SCHEMA = vol.Schema(
+    {
+        **_TARGET,
+        vol.Required("address"): cv.string,
+        vol.Optional("map_app", default="google"): vol.In(NAV_APPS),
     }
 )
 
@@ -115,6 +150,70 @@ def async_setup_services(hass: HomeAssistant) -> None:
         except TeyesCommandError as err:
             raise HomeAssistantError(str(err)) from err
 
+    async def _async_get_trips(call: ServiceCall) -> ServiceResponse:
+        """Return the car's recent trips."""
+        coordinator, device_id = _resolve(hass, call.data)
+        try:
+            data = await coordinator.client.async_get_trips(
+                device_id, size=call.data["count"]
+            )
+        except TeyesError as err:
+            raise HomeAssistantError(str(err)) from err
+        return {"trips": _jsonable((data or {}).get("data") or [])}
+
+    async def _async_get_events(call: ServiceCall) -> ServiceResponse:
+        """Return the car's recent sentry / alarm events."""
+        coordinator, device_id = _resolve(hass, call.data)
+        try:
+            data = await coordinator.client.async_get_events(
+                device_id, size=call.data["count"]
+            )
+        except TeyesError as err:
+            raise HomeAssistantError(str(err)) from err
+        return {"events": _jsonable((data or {}).get("data") or [])}
+
+    async def _async_list_geofences(call: ServiceCall) -> ServiceResponse:
+        """Return the car's geofences."""
+        coordinator, device_id = _resolve(hass, call.data)
+        try:
+            data = await coordinator.client.async_get_geofences(device_id)
+        except TeyesError as err:
+            raise HomeAssistantError(str(err)) from err
+        return {"geofences": _jsonable((data or {}).get("data") or [])}
+
+    async def _async_set_geofence(call: ServiceCall) -> None:
+        """Create or update a circular geofence."""
+        coordinator, device_id = _resolve(hass, call.data)
+        try:
+            await coordinator.client.async_set_geofence(
+                device_id,
+                scope_status="normal",
+                scope_position=f"{call.data['latitude']},{call.data['longitude']}",
+                scope_range=call.data["radius"],
+            )
+        except TeyesError as err:
+            raise HomeAssistantError(str(err)) from err
+        await coordinator.async_request_refresh()
+
+    async def _async_delete_geofence(call: ServiceCall) -> None:
+        """Delete geofences by id."""
+        coordinator, device_id = _resolve(hass, call.data)
+        try:
+            await coordinator.client.async_delete_geofences(device_id, call.data["ids"])
+        except TeyesError as err:
+            raise HomeAssistantError(str(err)) from err
+        await coordinator.async_request_refresh()
+
+    async def _async_send_navigation(call: ServiceCall) -> None:
+        """Send a destination for the car to open in a map app."""
+        coordinator, device_id = _resolve(hass, call.data)
+        try:
+            await coordinator.client.async_send_address(
+                device_id, call.data["address"], call.data["map_app"]
+            )
+        except TeyesError as err:
+            raise HomeAssistantError(str(err)) from err
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_API_CALL,
@@ -125,13 +224,45 @@ def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, SERVICE_SEND_COMMAND, _async_send_command, schema=SEND_COMMAND_SCHEMA
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_GET_TRIPS, _async_get_trips,
+        schema=PAGE_SCHEMA, supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_GET_EVENTS, _async_get_events,
+        schema=PAGE_SCHEMA, supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_LIST_GEOFENCES, _async_list_geofences,
+        schema=LIST_GEOFENCES_SCHEMA, supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SET_GEOFENCE, _async_set_geofence, schema=SET_GEOFENCE_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_DELETE_GEOFENCE, _async_delete_geofence,
+        schema=DELETE_GEOFENCE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SEND_NAVIGATION, _async_send_navigation,
+        schema=SEND_NAVIGATION_SCHEMA,
+    )
 
 
 @callback
 def async_unload_services(hass: HomeAssistant) -> None:
     """Remove the services when the last account goes away."""
-    hass.services.async_remove(DOMAIN, SERVICE_API_CALL)
-    hass.services.async_remove(DOMAIN, SERVICE_SEND_COMMAND)
+    for service in (
+        SERVICE_API_CALL,
+        SERVICE_SEND_COMMAND,
+        SERVICE_GET_TRIPS,
+        SERVICE_GET_EVENTS,
+        SERVICE_LIST_GEOFENCES,
+        SERVICE_SET_GEOFENCE,
+        SERVICE_DELETE_GEOFENCE,
+        SERVICE_SEND_NAVIGATION,
+    ):
+        hass.services.async_remove(DOMAIN, service)
 
 
 def _jsonable(value: Any) -> Any:

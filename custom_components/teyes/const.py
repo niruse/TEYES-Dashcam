@@ -12,6 +12,9 @@ MANUFACTURER: Final = "Teyes"
 REST_BASE: Final = "https://bsonline.teyesos.com/yfteyesonline"
 CLIENT_API: Final = f"{REST_BASE}/clientv3"
 CAR_API: Final = f"{REST_BASE}/carv3/car"
+# The SIM data-plan service is a separate host and sends its requests in the
+# clear (no RSA/AES envelope), unlike everything else.
+DATA_API: Final = "https://apiv2.teyes.ru/api/v2/Yfsmsv2"
 MQTT_WS_URL: Final = "wss://onlinev2.teyesos.com/websocket"
 
 # MQTT. The head unit publishes on one topic derived from the device id, and
@@ -44,13 +47,34 @@ DEFAULT_COORD_SYSTEM: Final = COORD_WGS84
 SERVICE_API_CALL: Final = "api_call"
 SERVICE_SEND_COMMAND: Final = "send_command"
 
+SERVICE_GET_TRIPS: Final = "get_trips"
+SERVICE_GET_EVENTS: Final = "get_events"
+SERVICE_LIST_GEOFENCES: Final = "list_geofences"
+SERVICE_SET_GEOFENCE: Final = "set_geofence"
+SERVICE_DELETE_GEOFENCE: Final = "delete_geofence"
+SERVICE_SEND_NAVIGATION: Final = "send_navigation"
+
 # Commands the head unit accepts, published to its topic as {type, message}.
 # Confirmed from the app bundle; the unit acts on them only while it is online.
 CMD_LOCK_SCREEN: Final = "lockscreen"
 CMD_UNLOCK_SCREEN: Final = "unlockscreen"
 CMD_LOCATE: Final = "app_location"
+CMD_CLOSE_4G: Final = "close4g"
 
-PLATFORMS: Final = ["binary_sensor", "button", "device_tracker", "lock", "sensor"]
+# Map apps the head unit can open a sent destination in.
+NAV_APPS: Final = ["google", "yandex", "waze", "gis"]
+
+# The four tyre positions the pressure endpoint reports.
+TYRES: Final = ("leftTop", "rightTop", "leftBottom", "rightBottom")
+
+PLATFORMS: Final = [
+    "binary_sensor",
+    "button",
+    "device_tracker",
+    "lock",
+    "sensor",
+    "switch",
+]
 
 # Both keys are embedded in the web bundle, so a standalone client can encrypt
 # its requests and read the replies. They are the vendor's, not a secret of
