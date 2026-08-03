@@ -183,8 +183,13 @@ class TeyesApiClient:
         *,
         base: str = CLIENT_API,
         authenticated: bool = True,
+        device_id: str | None = None,
     ) -> dict[str, Any]:
-        """Make one API call and return its decoded `{code, msg, data}`."""
+        """Make one API call and return its decoded `{code, msg, data}`.
+
+        `device_id` names which car the call is about; it overrides the
+        client's own so one account client can serve several cars.
+        """
         await self._crypto.async_prepare()
         body: dict[str, Any] = {
             "timezone": self.timezone,
@@ -193,7 +198,7 @@ class TeyesApiClient:
         }
         if authenticated:
             body.setdefault("uid", self.uid or "")
-            body.setdefault("imei", self.device_id or "")
+            body.setdefault("imei", device_id or self.device_id or "")
             body.setdefault("token", self.token or "")
 
         url = f"{base}{path}" if path.startswith("/") else f"{base}/{path}"
@@ -230,13 +235,14 @@ class TeyesApiClient:
         params: dict[str, Any] | None = None,
         *,
         base: str = CLIENT_API,
+        device_id: str | None = None,
     ) -> Any:
         """Call an endpoint, refresh a stale session once, and return `data`.
 
         Raises TeyesAuthError when the session cannot be recovered, so Home
         Assistant can start a re-authentication flow.
         """
-        result = await self.async_call(path, params, base=base)
+        result = await self.async_call(path, params, base=base, device_id=device_id)
         code = result.get("code")
         if code in _CODE_OK:
             return result.get("data")
@@ -249,7 +255,7 @@ class TeyesApiClient:
             raise TeyesAuthError(message)
         _LOGGER.debug("Session rejected (%s); logging in again", message)
         await self.async_login()
-        result = await self.async_call(path, params, base=base)
+        result = await self.async_call(path, params, base=base, device_id=device_id)
         if result.get("code") in _CODE_OK:
             return result.get("data")
         raise TeyesAuthError(str(result.get("msg") or f"code {result.get('code')}"))
@@ -309,38 +315,28 @@ class TeyesApiClient:
             self._on_session(self.token, self.uid)
         return data
 
-    async def async_get_car_mq_state(self) -> dict[str, Any]:
-        """Read the car's cloud state and the MQTT credentials that go with it.
+    async def async_get_car_mq_state(self, device_id: str) -> dict[str, Any]:
+        """Read a car's cloud state and the MQTT credentials that go with it.
 
         Returns `acc`, `isonline`, `iscamera`, `isqj` and a `server` block
         holding the broker address plus this car's `apiname`/`apikey`.
         """
-        data = await self.async_request("/user/getCarMqState")
+        data = await self.async_request("/user/getCarMqState", device_id=device_id)
         if not isinstance(data, dict):
             raise TeyesApiError("getCarMqState returned no state")
         return data
 
-    async def async_list_devices(self) -> list[str]:
-        """Best-effort list of the device ids on the account.
+    async def async_get_cars(self) -> list[dict[str, Any]]:
+        """List the cars on this account, newest binding first.
 
-        Only the login reply is a proven source, so this stays advisory: the
-        config flow falls back to asking for the id when it comes up empty.
+        `selectCar` is scoped by `uid`: with it the reply is just this
+        account's cars, and each record carries the device id, a name, the
+        model and the last known position — enough to set up without asking
+        the user for anything.
         """
-        found: list[str] = []
-        if self.device_id:
-            found.append(self.device_id)
-        try:
-            data = await self.async_request("/user/getCarList")
-        except TeyesError as err:
-            _LOGGER.debug("No car list endpoint: %s", err)
-            return found
-        for item in data if isinstance(data, list) else [data]:
-            if isinstance(item, dict):
-                flat = _flatten(item)
-                if device := _first(flat, ("imei", "deviceid", "sn", "carid")):
-                    if str(device) not in found:
-                        found.append(str(device))
-        return found
+        data = await self.async_request("/user/selectCar")
+        cars = data if isinstance(data, list) else [data] if data else []
+        return [car for car in cars if isinstance(car, dict) and car.get("imei")]
 
 
 def _flatten(data: Any, out: dict[str, Any] | None = None) -> dict[str, Any]:

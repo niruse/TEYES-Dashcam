@@ -27,6 +27,7 @@ APIS = ("client", *CAR_HOSTS)
 API_CALL_SCHEMA = vol.Schema(
     {
         vol.Optional("entry_id"): cv.string,
+        vol.Optional("device_id"): cv.string,
         vol.Optional("api", default="client"): vol.In(APIS),
         vol.Required("path"): cv.string,
         vol.Optional("params", default={}): dict,
@@ -34,12 +35,12 @@ API_CALL_SCHEMA = vol.Schema(
 )
 
 
-def _base_for(coordinator: TeyesCoordinator, api: str) -> str:
-    """Resolve which host an API name points at for this account."""
+def _base_for(coordinator: TeyesCoordinator, api: str, device_id: str) -> str:
+    """Resolve which host an API name points at for a given car."""
     if api == "client":
         return CLIENT_API
     key = "ajaxurl" if api == "car" else f"{api}url"
-    base = coordinator.server.get(key)
+    base = coordinator.server(device_id).get(key)
     if isinstance(base, str) and base.startswith("http"):
         return base.rstrip("/")
     return CAR_API
@@ -65,11 +66,18 @@ def async_setup_services(hass: HomeAssistant) -> None:
         if coordinator is None:
             raise ServiceValidationError(f"Unknown Teyes entry {entry_id}")
 
+        # Default to the account's first selected car, so the common single-car
+        # case needs no device id.
+        device_id = call.data.get("device_id") or (
+            coordinator.selected[0] if coordinator.selected else None
+        )
+
         try:
             result = await coordinator.client.async_call(
                 call.data["path"],
                 dict(call.data.get("params") or {}),
-                base=_base_for(coordinator, call.data["api"]),
+                base=_base_for(coordinator, call.data["api"], device_id or ""),
+                device_id=device_id,
             )
         except TeyesError as err:
             raise HomeAssistantError(str(err)) from err

@@ -23,6 +23,7 @@ MQTT_KEEPALIVE: Final = 10
 CONF_TOKEN: Final = "token"
 CONF_UID: Final = "uid"
 CONF_DEVICE_ID: Final = "device_id"
+CONF_DEVICE_IDS: Final = "device_ids"
 CONF_AUTH_MODE: Final = "auth_mode"
 CONF_SCAN_INTERVAL: Final = "scan_interval"
 CONF_ENABLE_PUSH: Final = "enable_push"

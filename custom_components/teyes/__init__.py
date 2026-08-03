@@ -9,7 +9,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import TeyesApiClient, TeyesAuthError, TeyesError
 from .const import (
-    CONF_DEVICE_ID,
+    CONF_DEVICE_IDS,
     CONF_TOKEN,
     CONF_UID,
     DOMAIN,
@@ -37,7 +37,6 @@ def build_client(hass: HomeAssistant, entry: ConfigEntry) -> TeyesApiClient:
         password=entry.data.get(CONF_PASSWORD),
         token=entry.data.get(CONF_TOKEN),
         uid=entry.data.get(CONF_UID),
-        device_id=entry.data.get(CONF_DEVICE_ID),
         timezone=hass.config.time_zone or "UTC",
         language=hass.config.language or "en",
         on_session=_store_session,
@@ -77,13 +76,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload when the options change.
+    """Reload when the options or the selected cars change.
 
     A refreshed session token is also written back to the entry, which fires
-    this listener; comparing the options avoids reloading for that.
+    this listener; reloading only when the options or the car list actually
+    changed avoids a needless reload then.
     """
     coordinator: TeyesCoordinator | None = hass.data[DOMAIN].get(entry.entry_id)
-    if coordinator is None or dict(entry.options) != coordinator.options_snapshot:
+    if coordinator is None:
+        await hass.config_entries.async_reload(entry.entry_id)
+        return
+    options_changed = dict(entry.options) != coordinator.options_snapshot
+    cars_changed = list(entry.data.get(CONF_DEVICE_IDS) or []) != coordinator.selected
+    if options_changed or cars_changed:
         await hass.config_entries.async_reload(entry.entry_id)
 
 

@@ -50,6 +50,30 @@ class Telemetry:
         return bool(self.fields)
 
 
+def parse_location_field(value: Any, coordinate_system: str) -> dict[str, Any]:
+    """Read the `location` string a `selectCar` record carries.
+
+    It is pipe-delimited `lat|lng|speed|heading|epoch_ms`, and gives a
+    position for a parked car — before any live message has arrived.
+    """
+    if not isinstance(value, str) or "|" not in value:
+        return {}
+    parts = value.split("|")
+    reading: dict[str, Any] = {}
+    for name, index in (("latitude", 0), ("longitude", 1), ("speed", 2), ("heading", 3)):
+        if index < len(parts) and (number := _number(parts[index])) is not None:
+            reading[name] = number
+    lat, lon = _rescale(reading.get("latitude"), reading.get("longitude"))
+    if lat is None or lon is None:
+        return {}
+    if coordinate_system == COORD_GCJ02:
+        lat, lon = _gcj02_to_wgs84(lat, lon)
+    reading["latitude"], reading["longitude"] = round(lat, 7), round(lon, 7)
+    if len(parts) > 4 and (when := _timestamp(parts[4])) is not None:
+        reading["gps_time"] = when
+    return reading
+
+
 def parse_message(payload: bytes) -> Any:
     """Decode an MQTT payload, falling back to text when it is not JSON."""
     text = payload.decode("utf-8", "replace").strip()

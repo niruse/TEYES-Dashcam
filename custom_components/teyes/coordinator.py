@@ -1,7 +1,10 @@
 """Coordinator for the Teyes integration.
 
-Two sources feed the same picture: `getCarMqState` is polled for the car's
-cloud state, and the car itself pushes telemetry over MQTT while it is online.
+One config entry is one Teyes account, following one or more of its cars.
+Three sources feed each car's picture: `selectCar` lists every car with its
+last parked position and details, `getCarMqState` gives the live cloud state
+and the MQTT credentials, and the car itself pushes telemetry over MQTT while
+it is online.
 """
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ from homeassistant.util import dt as dt_util
 from .api import TeyesApiClient, TeyesAuthError, TeyesError
 from .const import (
     CONF_COORD_SYSTEM,
+    CONF_DEVICE_IDS,
     CONF_ENABLE_PUSH,
     CONF_SCAN_INTERVAL,
     DEFAULT_COORD_SYSTEM,
@@ -29,13 +33,13 @@ from .const import (
     MQTT_WS_URL,
 )
 from .mqtt import MqttConnection, TeyesMqttClient
-from .telemetry import Telemetry, normalise, parse_message
+from .telemetry import Telemetry, normalise, parse_location_field, parse_message
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Polls the car's cloud state and folds in the pushed telemetry."""
+    """Polls one Teyes account and folds in the pushed telemetry per car."""
 
     config_entry: ConfigEntry
 
@@ -43,17 +47,19 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self, hass: HomeAssistant, entry: ConfigEntry, client: TeyesApiClient
     ) -> None:
         self.client = client
-        self.device_id = client.device_id or entry.unique_id or ""
+        self.selected: list[str] = list(entry.data.get(CONF_DEVICE_IDS) or [])
         self.options_snapshot = dict(entry.options)
         self.coordinate_system = entry.options.get(
             CONF_COORD_SYSTEM, DEFAULT_COORD_SYSTEM
         )
-        # The last car message, kept whole so an unrecognised payload can still
-        # be read from the diagnostics and the telemetry entity.
-        self.telemetry = Telemetry(None, {})
-        self.last_message_at: str | None = None
-        self.message_count = 0
-        self._mqtt: TeyesMqttClient | None = None
+        # Per car, keyed by device id. The last car message is kept whole so an
+        # unrecognised payload is still readable from diagnostics and entities.
+        self.cars: dict[str, dict[str, Any]] = {}
+        self.states: dict[str, dict[str, Any]] = {}
+        self.telemetry: dict[str, Telemetry] = {}
+        self.last_message_at: dict[str, str] = {}
+        self.message_count: dict[str, int] = {}
+        self._mqtt: dict[str, TeyesMqttClient] = {}
         super().__init__(
             hass,
             _LOGGER,
@@ -64,60 +70,105 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
         )
 
-    @property
-    def state(self) -> dict[str, Any]:
-        """The last `getCarMqState` reply."""
-        return (self.data or {}).get("state") or {}
+    # ── per-car accessors, all safe before the first refresh ──────────────
 
-    @property
-    def server(self) -> dict[str, Any]:
+    def car(self, device_id: str) -> dict[str, Any]:
+        """The last `selectCar` record for a car."""
+        return self.cars.get(device_id) or {}
+
+    def state(self, device_id: str) -> dict[str, Any]:
+        """The last `getCarMqState` reply for a car."""
+        return self.states.get(device_id) or {}
+
+    def server(self, device_id: str) -> dict[str, Any]:
         """The `server` block of that reply: broker address and car keys."""
-        server = self.state.get("server")
+        server = self.state(device_id).get("server")
         return server if isinstance(server, dict) else {}
 
-    @property
-    def push_connected(self) -> bool:
-        """Whether the telemetry socket is subscribed right now."""
-        return bool(self._mqtt and self._mqtt.connected)
+    def telemetry_fields(self, device_id: str) -> dict[str, Any]:
+        """The car's merged live values, with the parked position as a floor."""
+        return (self.telemetry.get(device_id) or Telemetry(None, {})).fields
+
+    def push_connected(self, device_id: str) -> bool:
+        """Whether a car's telemetry socket is subscribed right now."""
+        client = self._mqtt.get(device_id)
+        return bool(client and client.connected)
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            state = await self.client.async_get_car_mq_state()
+            cars = await self.client.async_get_cars()
         except TeyesAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except TeyesError as err:
             raise UpdateFailed(str(err)) from err
-        return {"state": state, "telemetry": dict(self.telemetry.fields)}
+        self.cars = {str(car["imei"]): car for car in cars}
+
+        # A selected car that has left the account simply stops updating; its
+        # entities go unavailable rather than erroring the whole refresh.
+        for device_id in self.selected:
+            if device_id not in self.cars:
+                continue
+            try:
+                self.states[device_id] = await self.client.async_get_car_mq_state(
+                    device_id
+                )
+            except TeyesAuthError as err:
+                raise ConfigEntryAuthFailed(str(err)) from err
+            except TeyesError as err:
+                _LOGGER.debug("getCarMqState failed for %s: %s", device_id, err)
+            self._apply_parked_location(device_id)
+        return {"cars": self.cars, "states": self.states}
+
+    def _apply_parked_location(self, device_id: str) -> None:
+        """Seed a car's telemetry from its parked position in `selectCar`.
+
+        A live message always wins; this only fills what the car has not
+        pushed, so a parked car still shows on the map.
+        """
+        parked = parse_location_field(
+            self.car(device_id).get("location"), self.coordinate_system
+        )
+        if not parked:
+            return
+        existing = self.telemetry_fields(device_id)
+        raw = (self.telemetry.get(device_id) or Telemetry(None, {})).raw
+        self.telemetry[device_id] = Telemetry(raw, {**parked, **existing})
 
     # ── telemetry push ────────────────────────────────────────────────────
 
     def start_push(self) -> None:
-        """Subscribe to the car's topic, unless the user turned push off."""
+        """Subscribe to each selected car's topic, unless push is off."""
         if not self.config_entry.options.get(CONF_ENABLE_PUSH, DEFAULT_ENABLE_PUSH):
             return
-        if not self.device_id:
-            _LOGGER.debug("No device id, so no telemetry subscription")
-            return
-        self._mqtt = TeyesMqttClient(
-            self.client.session,
-            self._async_connection,
-            self._handle_message,
-            self._handle_push_state,
-            create_task=lambda coro, name: self.config_entry.async_create_background_task(
-                self.hass, coro, name
-            ),
-        )
-        self._mqtt.start()
+        for device_id in self.selected:
+            if device_id in self._mqtt:
+                continue
+            self._mqtt[device_id] = TeyesMqttClient(
+                self.client.session,
+                lambda device_id=device_id: self._async_connection(device_id),
+                lambda topic, payload, device_id=device_id: self._handle_message(
+                    device_id, payload
+                ),
+                lambda connected, device_id=device_id: self._handle_push_state(
+                    device_id, connected
+                ),
+                create_task=lambda coro, name: (
+                    self.config_entry.async_create_background_task(
+                        self.hass, coro, name
+                    )
+                ),
+            )
+            self._mqtt[device_id].start()
 
     async def async_stop_push(self) -> None:
-        """Close the telemetry socket."""
-        if self._mqtt is not None:
-            await self._mqtt.async_stop()
-            self._mqtt = None
+        """Close every telemetry socket."""
+        clients, self._mqtt = list(self._mqtt.values()), {}
+        for client in clients:
+            await client.async_stop()
 
     @staticmethod
     def _broker_url(server: dict[str, Any]) -> str:
-        """Build the broker address out of the `server` block.
+        """Build the broker address out of a `server` block.
 
         The reply names it in three parts — `protocol`, `url` and `path` —
         which is how an account gets moved between regional brokers.
@@ -131,49 +182,47 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             path = f"/{path}"
         return f"{protocol}://{host}{path}"
 
-    async def _async_connection(self) -> MqttConnection:
-        """Fetch the broker address and the car's key for one attempt.
+    async def _async_connection(self, device_id: str) -> MqttConnection:
+        """Fetch a car's broker address and key for one attempt.
 
-        These are read fresh rather than taken from the last poll, so a
-        reconnect after the key rotated picks up the new one straight away.
+        Read fresh rather than from the last poll, so a reconnect after the
+        key rotated picks up the new one straight away.
         """
         try:
-            state = await self.client.async_get_car_mq_state()
+            state = await self.client.async_get_car_mq_state(device_id)
         except TeyesError as err:
-            _LOGGER.debug("Could not refresh the car keys: %s", err)
-            state = self.state
+            _LOGGER.debug("Could not refresh keys for %s: %s", device_id, err)
+            state = self.state(device_id)
         else:
-            self.async_set_updated_data(
-                {"state": state, "telemetry": dict(self.telemetry.fields)}
-            )
+            self.states[device_id] = state
+            self.async_update_listeners()
         server = state.get("server") if isinstance(state, dict) else None
         server = server if isinstance(server, dict) else {}
-        device = self.device_id
         return MqttConnection(
             url=self._broker_url(server),
-            client_id=f"{MQTT_CLIENT_PREFIX}{device}",
-            username=device,
+            client_id=f"{MQTT_CLIENT_PREFIX}{device_id}",
+            username=device_id,
             password=str(server.get("apikey") or ""),
-            topics=[f"{MQTT_TOPIC_PREFIX}{device}"],
+            topics=[f"{MQTT_TOPIC_PREFIX}{device_id}"],
         )
 
     @callback
-    def _handle_push_state(self, connected: bool) -> None:
-        """Reflect the socket going up or down on the entities."""
+    def _handle_push_state(self, device_id: str, connected: bool) -> None:
+        """Reflect a socket going up or down on the entities."""
         self.async_update_listeners()
 
     @callback
-    def _handle_message(self, topic: str, payload: bytes) -> None:
+    def _handle_message(self, device_id: str, payload: bytes) -> None:
         """Fold a pushed car message into the coordinator's data."""
         raw = parse_message(payload)
         if raw is None:
             return
-        _LOGGER.debug("Car message on %s: %s", topic, raw)
-        telemetry = normalise(raw, self.coordinate_system)
+        _LOGGER.debug("Car message for %s: %s", device_id, raw)
+        fresh = normalise(raw, self.coordinate_system)
         # Keep the previous values for anything this message left out, so a
         # partial report does not blank out the entities.
-        merged = {**self.telemetry.fields, **telemetry.fields}
-        self.telemetry = Telemetry(raw, merged)
-        self.message_count += 1
-        self.last_message_at = dt_util.utcnow().isoformat()
-        self.async_set_updated_data({"state": self.state, "telemetry": merged})
+        merged = {**self.telemetry_fields(device_id), **fresh.fields}
+        self.telemetry[device_id] = Telemetry(raw, merged)
+        self.message_count[device_id] = self.message_count.get(device_id, 0) + 1
+        self.last_message_at[device_id] = dt_util.utcnow().isoformat()
+        self.async_update_listeners()

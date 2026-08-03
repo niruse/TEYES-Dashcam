@@ -16,18 +16,20 @@ from .entity import TeyesEntity
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    """Set up the car tracker."""
+    """Set up a tracker for every selected car."""
     coordinator: TeyesCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([TeyesDeviceTracker(coordinator)])
+    async_add_entities(
+        TeyesDeviceTracker(coordinator, device_id) for device_id in coordinator.selected
+    )
 
 
 class TeyesDeviceTracker(TeyesEntity, TrackerEntity):
-    """Where the car last reported itself."""
+    """Where a car last reported itself."""
 
-    _attr_name = None  # the entity takes the device's name
+    _attr_name = None  # the entity takes the car's name
 
-    def __init__(self, coordinator: TeyesCoordinator) -> None:
-        super().__init__(coordinator, "tracker")
+    def __init__(self, coordinator: TeyesCoordinator, device_id: str) -> None:
+        super().__init__(coordinator, device_id, "tracker")
 
     @property
     def source_type(self) -> SourceType:

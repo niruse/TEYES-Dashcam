@@ -19,18 +19,17 @@
       },
       "token": {
         "title": "Session token",
-        "description": "Open the Teyes portal in a signed-in browser and read localStorage on online.teyes.cn: ucenterToken, uid and imei.",
+        "description": "Open the Teyes portal in a signed-in browser and read localStorage on online.teyes.cn: ucenterToken and uid. Your cars are found automatically.",
         "data": {
           "token": "Session token (ucenterToken)",
-          "uid": "Account id (uid)",
-          "device_id": "Device id (imei)"
+          "uid": "Account id (uid)"
         }
       },
-      "device": {
-        "title": "Car",
-        "description": "The device id of the head unit, shown as imei in the portal.",
+      "select": {
+        "title": "Cars",
+        "description": "Tick the cars to add to Home Assistant. You can change this later in the integration's options.",
         "data": {
-          "device_id": "Device id"
+          "device_ids": "Cars"
         }
       },
       "reauth_confirm": {
@@ -44,11 +43,12 @@
     "error": {
       "cannot_connect": "Could not reach the Teyes cloud.",
       "invalid_auth": "Teyes rejected those credentials.",
-      "unknown_device": "Teyes did not recognise that device id for this account.",
+      "unknown_device": "No cars were found for this account.",
+      "no_cars_selected": "Pick at least one car.",
       "unknown": "Unexpected error."
     },
     "abort": {
-      "already_configured": "That car is already set up.",
+      "already_configured": "This account is already set up.",
       "reauth_successful": "Signed in again."
     }
   },
@@ -57,11 +57,13 @@
       "init": {
         "title": "Teyes options",
         "data": {
+          "device_ids": "Cars",
           "scan_interval": "Polling interval (seconds)",
           "enable_push": "Listen for live reports from the car",
           "coordinate_system": "Coordinate system the car reports in"
         },
         "data_description": {
+          "device_ids": "Tick the cars this account should follow.",
           "enable_push": "Keeps a socket open to the Teyes cloud so position and speed arrive as the car sends them.",
           "coordinate_system": "Leave on WGS-84 unless the car's position shows up a few hundred metres off inside China."
         }
@@ -105,6 +107,10 @@
         "entry_id": {
           "name": "Account",
           "description": "Which configured account to use. Defaults to the only one."
+        },
+        "device_id": {
+          "name": "Car",
+          "description": "Device id (imei) of the car to act on. Defaults to the account's first car."
         },
         "api": {
           "name": "API",

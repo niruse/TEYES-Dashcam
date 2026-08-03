@@ -4,18 +4,22 @@ A custom integration for **Teyes** Android head units (built and tested against
 a **CC4 Pro**) that connects to the Teyes Online cloud the same way the vendor's
 web portal does.
 
-It gives you the car's position, its ignition and online state, and whatever
+It gives you each car's position, its ignition and online state, and whatever
 else the head unit reports — read straight from the cloud, with no app running
-on a phone.
+on a phone. One account can hold several cars; you tick which ones to bring
+into Home Assistant, and the position shows even while a car is parked.
 
 > Unofficial. Teyes provides no public API; everything here was worked out from
 > the portal's own web bundle and its traffic.
 
 ## What you get
 
+Each selected car becomes its own device, named after the car (e.g. "Suzuki
+scross 2014 Milana"), with:
+
 | Entity | What it is |
 | --- | --- |
-| `device_tracker.<car>` | Where the car last reported itself |
+| `device_tracker.<car>` | Where the car is — its parked position even while off |
 | `binary_sensor.<car>_online` | Whether the head unit is talking to the cloud |
 | `binary_sensor.<car>_ignition` | ACC on/off |
 | `sensor.<car>_speed` | Speed, while the car is reporting |
@@ -24,10 +28,12 @@ on a phone.
 | `sensor.<car>_position_time` | Timestamp on the last GPS fix |
 | `sensor.<car>_last_report` | When the last live message arrived |
 
-Altitude, satellites, mileage and voltage entities exist too, disabled by
-default: whether the head unit sends them is not yet known, so they are there
-to switch on once a car has been seen reporting. Diagnostic entities cover the
-live connection, the fitted-camera flags, and the raw last message.
+The parked position comes from the account's own car list, so the tracker
+works without waiting for the car to come online. Altitude, satellites,
+mileage and voltage entities exist too, disabled by default: whether the head
+unit sends them is not yet known, so they are there to switch on once a car
+has been seen reporting. Diagnostic entities cover the live connection, the
+fitted-camera flags, and the raw last message.
 
 ## Requirements
 
@@ -49,7 +55,9 @@ Then go to *Settings → Devices & services → Add integration → Teyes*.
 
 ## Setting it up
 
-There are two ways in.
+There are two ways in. Either way, your cars are discovered automatically —
+you never type a device id — and if the account has more than one car you tick
+the ones to add.
 
 **Email and password** — the account you use on the Teyes portal. Home
 Assistant keeps the session and renews it on its own when it expires.
@@ -61,7 +69,6 @@ the API behind it is still up, which does happen. Sign in to
 ```js
 localStorage.getItem('ucenterToken')   // the session token
 localStorage.getItem('uid')            // the account id, e.g. email12345
-localStorage.getItem('imei')           // the device id of the head unit
 ```
 
 A token lasts a few days; when it expires Home Assistant asks for a new one.
@@ -72,6 +79,8 @@ A token lasts a few days; when it expires Home Assistant asks for a new one.
 
 ## Options
 
+- **Cars** — tick which of the account's cars this entry follows. Add or remove
+  cars here at any time after setup.
 - **Polling interval** — how often the car's cloud state is read. 60 seconds by
   default.
 - **Listen for live reports** — keeps a socket open to the cloud so position and
@@ -97,8 +106,9 @@ response_variable: result
 `api` picks the host: `client` is the account API, and `car`, `track`, `acc`,
 `msg`, `file`, `update`, `ef` and `tmps` are the car API hosts your account was
 assigned. `uid`, `imei`, `token`, language and timezone are filled in for you;
-anything in `params` is added on top. The decoded reply comes back as the
-action's response.
+anything in `params` is added on top, and `device_id` chooses which car the
+call is about (it defaults to the account's first). The decoded reply comes
+back as the action's response.
 
 If you find a method that returns something useful, please open an issue — it
 can become a proper entity.

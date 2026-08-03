@@ -6,6 +6,11 @@ api_call:
       selector:
         config_entry:
           integration: teyes
+    device_id:
+      required: false
+      example: p1c25if16000100
+      selector:
+        text:
     api:
       required: false
       default: client
