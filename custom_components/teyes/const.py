@@ -61,6 +61,12 @@ CMD_LOCK_SCREEN: Final = "lockscreen"
 CMD_UNLOCK_SCREEN: Final = "unlockscreen"
 CMD_LOCATE: Final = "app_location"
 CMD_CLOSE_4G: Final = "close4g"
+CMD_START_LIVE: Final = "app_start_live"
+CMD_STOP_LIVE: Final = "app_stop_live"
+
+# The head unit's cameras, named by direction. Which are fitted is listed in
+# the car record's `camers` field.
+CAMERA_DIRECTIONS: Final = ("top", "bottom", "left", "right")
 
 # Map apps the head unit can open a sent destination in.
 NAV_APPS: Final = ["google", "yandex", "waze", "gis"]
@@ -71,6 +77,7 @@ TYRES: Final = ("leftTop", "rightTop", "leftBottom", "rightBottom")
 PLATFORMS: Final = [
     "binary_sensor",
     "button",
+    "camera",
     "device_tracker",
     "lock",
     "sensor",

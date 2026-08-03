@@ -3,6 +3,7 @@
   "name": "Teyes",
   "codeowners": ["@niruse"],
   "config_flow": true,
+  "dependencies": ["ffmpeg"],
   "documentation": "https://github.com/niruse/TEYES",
   "integration_type": "device",
   "iot_class": "cloud_push",

@@ -14,6 +14,16 @@ into Home Assistant, and the position shows even while a car is parked.
 
 ## What you get
 
+### Cameras
+
+Each fitted lens becomes a camera entity (`camera.<car>_front_camera`, rear,
+left, right). Opening one tells the head unit to start streaming and plays its
+cloud feed — the integration uses the HLS URL the app itself plays, so Home
+Assistant streams it directly with no extra add-on. Live video needs the car
+online; the entity is there whenever the car is, and shows the feed once it is
+streaming. Needs Home Assistant's built-in `ffmpeg` (present by default) for
+still images.
+
 Each selected car becomes its own device, named after the car (e.g. "Suzuki
 scross 2014 Milana"), with:
 
@@ -182,8 +192,7 @@ what the car sends, so each becomes a real entity from real data.
   the app's lazily-loaded screens, so their exact payloads have to be captured
   (see [`tools/README.md`](tools/README.md)) and can then be sent with
   `teyes.send_command` before becoming their own entities.
-- **Live video is not built.** The head unit *does* stream remotely, but over a
-  heavy WebRTC / HLS / FLV stack (the app's camera bundle is ~6 MB of it). A
-  Home Assistant camera would need that stack reversed and a streaming bridge
-  built, plus the car online to test — a substantial piece of its own. Captured
-  still photos from events are reachable now via `teyes.get_photo`.
+- **Live video is built** (see [Cameras](#cameras)). It plays the cloud HLS/FLV
+  feed the app uses; the head unit also offers a WebRTC (Aliyun RTC) path, which
+  is not needed since HLS plays directly. Full end-to-end video can only be seen
+  with the car online and streaming.

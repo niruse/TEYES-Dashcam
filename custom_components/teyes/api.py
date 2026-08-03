@@ -396,6 +396,31 @@ class TeyesApiClient:
         )
         return data if isinstance(data, dict) else {}
 
+    async def async_get_lives(
+        self, device_id: str, direction: str, *, app_version: Any = 0
+    ) -> dict[str, Any]:
+        """The live-stream play URLs for one of the car's cameras.
+
+        Returns a dict with `hls_play_url`, `flv_play_url`, `rtmp_play_url` and
+        `artc_play_url`; the URLs carry a time-limited `auth_key`, so they are
+        re-fetched when they age. The car must be streaming (send the start
+        command first) for the URLs to actually carry video.
+        """
+        data = await self.async_request(
+            "/lives/getLives",
+            {
+                "imei": device_id,
+                "direction": direction,
+                "type": "live",
+                "app_version": app_version,
+            },
+            device_id=device_id,
+        )
+        lives = data.get("live") if isinstance(data, dict) else None
+        if isinstance(lives, list) and lives and isinstance(lives[0], dict):
+            return lives[0]
+        return {}
+
     async def async_get_photo(self, photo_id: Any) -> dict[str, Any]:
         """A captured photo's details (image link and where it was taken).
 

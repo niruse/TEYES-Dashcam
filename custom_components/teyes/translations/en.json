@@ -127,6 +127,12 @@
     },
     "switch": {
       "stealth_mode": { "name": "Stealth mode" }
+    },
+    "camera": {
+      "camera_top": { "name": "Front camera" },
+      "camera_bottom": { "name": "Rear camera" },
+      "camera_left": { "name": "Left camera" },
+      "camera_right": { "name": "Right camera" }
     }
   },
   "services": {
