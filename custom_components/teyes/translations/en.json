@@ -233,6 +233,15 @@
         "address": { "name": "Address", "description": "Place name or 'lat,lng'." },
         "map_app": { "name": "Map app", "description": "google, yandex, waze or gis." }
       }
+    },
+    "get_photo": {
+      "name": "Get a photo",
+      "description": "Return a captured photo's details (image link, location) by its id from an event.",
+      "fields": {
+        "entry_id": { "name": "Account", "description": "Which account. Defaults to the only one." },
+        "device_id": { "name": "Car", "description": "Device id (imei). Defaults to the first car." },
+        "photo_id": { "name": "Photo id", "description": "The id from an event in get_events." }
+      }
     }
   }
 }

@@ -396,6 +396,15 @@ class TeyesApiClient:
         )
         return data if isinstance(data, dict) else {}
 
+    async def async_get_photo(self, photo_id: Any) -> dict[str, Any]:
+        """A captured photo's details (image link and where it was taken).
+
+        The `id` comes from an event in `sentryList`; impact events leave a
+        photo the car uploaded.
+        """
+        data = await self.async_request("/user/getPhotoData", {"id": photo_id})
+        return data if isinstance(data, dict) else {}
+
     # ── geofences (electronic fence) ──────────────────────────────────────
 
     async def async_get_geofences(

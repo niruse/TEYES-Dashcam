@@ -195,3 +195,20 @@ send_navigation:
             - yandex
             - waze
             - gis
+
+get_photo:
+  fields:
+    entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: teyes
+    device_id:
+      required: false
+      selector:
+        text:
+    photo_id:
+      required: true
+      example: "123456"
+      selector:
+        text:

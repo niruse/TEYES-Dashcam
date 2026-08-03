@@ -24,6 +24,7 @@ from .const import (
     SERVICE_API_CALL,
     SERVICE_DELETE_GEOFENCE,
     SERVICE_GET_EVENTS,
+    SERVICE_GET_PHOTO,
     SERVICE_GET_TRIPS,
     SERVICE_LIST_GEOFENCES,
     SERVICE_SEND_COMMAND,
@@ -83,6 +84,7 @@ SEND_NAVIGATION_SCHEMA = vol.Schema(
         vol.Optional("map_app", default="google"): vol.In(NAV_APPS),
     }
 )
+GET_PHOTO_SCHEMA = vol.Schema({**_TARGET, vol.Required("photo_id"): cv.string})
 
 
 def _resolve(hass: HomeAssistant, data: Any) -> tuple[TeyesCoordinator, str]:
@@ -214,6 +216,15 @@ def async_setup_services(hass: HomeAssistant) -> None:
         except TeyesError as err:
             raise HomeAssistantError(str(err)) from err
 
+    async def _async_get_photo(call: ServiceCall) -> ServiceResponse:
+        """Return a captured photo's details, by id from an event."""
+        coordinator, _ = _resolve(hass, call.data)
+        try:
+            data = await coordinator.client.async_get_photo(call.data["photo_id"])
+        except TeyesError as err:
+            raise HomeAssistantError(str(err)) from err
+        return {"photo": _jsonable(data)}
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_API_CALL,
@@ -247,6 +258,10 @@ def async_setup_services(hass: HomeAssistant) -> None:
         DOMAIN, SERVICE_SEND_NAVIGATION, _async_send_navigation,
         schema=SEND_NAVIGATION_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_GET_PHOTO, _async_get_photo,
+        schema=GET_PHOTO_SCHEMA, supports_response=SupportsResponse.ONLY,
+    )
 
 
 @callback
@@ -261,6 +276,7 @@ def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_SET_GEOFENCE,
         SERVICE_DELETE_GEOFENCE,
         SERVICE_SEND_NAVIGATION,
+        SERVICE_GET_PHOTO,
     ):
         hass.services.async_remove(DOMAIN, service)
 

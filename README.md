@@ -37,16 +37,39 @@ scross 2014 Milana"), with:
 
 ### Controls
 
-While the car is online it also accepts commands:
-
 | Entity | What it does |
 | --- | --- |
-| `lock.<car>_screen` | Lock or unlock the head unit's screen |
-| `button.<car>_update_location` | Ask the car to report its position now |
+| `lock.<car>_screen` | Lock or unlock the head unit's screen (car online) |
+| `button.<car>_update_location` | Ask the car to report its position now (car online) |
+| `switch.<car>_stealth_mode` | Hide the car in shared views (cloud, works offline) |
+| `button.<car>_disable_mobile_data` | Turn the car's 4G off via the cloud (disabled by default) |
 
-These are unavailable while the car is offline, since it cannot act on a
-command it never receives. The `teyes.send_command` action sends any other
-command the head unit understands — see [Extending it](#extending-it--the-features-that-need-the-car-online).
+The lock and locate buttons are unavailable while the car is offline, since it
+cannot act on a command it never receives.
+
+### Trips, tyres and more
+
+- **Trip history** — a `Last trip` sensor (start/end/date/distance) and a
+  `Recorded trips` count; the `teyes.get_trips` action returns recent trips with
+  their recorded path.
+- **Tyre pressure** — a sensor per wheel (for cars fitted with TPMS sensors),
+  with temperature, alert and connection in the attributes.
+- **Signal** and **Last alarm** sensors, fed by the car's live reports; a
+  `teyes_alarm` event fires on each shake/impact.
+- **SIM data plan** — a `Data remaining` sensor for SIMs registered with the
+  data service.
+
+### Actions
+
+| Action | What it does |
+| --- | --- |
+| `teyes.get_trips` | Recent trips, newest first |
+| `teyes.get_events` | Sentry / alarm events |
+| `teyes.get_photo` | A captured photo's details (link, location) by id |
+| `teyes.set_geofence` | Create/update a circular geofence |
+| `teyes.list_geofences` / `delete_geofence` | Manage geofences |
+| `teyes.send_navigation` | Send a destination to open in a map app |
+| `teyes.send_command` / `api_call` | The escape hatches for anything not wrapped yet |
 
 The parked position comes from the account's own car list, so the tracker
 works without waiting for the car to come online. Altitude, satellites,
@@ -159,5 +182,8 @@ what the car sends, so each becomes a real entity from real data.
   the app's lazily-loaded screens, so their exact payloads have to be captured
   (see [`tools/README.md`](tools/README.md)) and can then be sent with
   `teyes.send_command` before becoming their own entities.
-- **No video.** Whether a CC4 Pro exposes any stream remotely is still an open
-  question; it may be local-only. `tools/README.md` says what to look for.
+- **Live video is not built.** The head unit *does* stream remotely, but over a
+  heavy WebRTC / HLS / FLV stack (the app's camera bundle is ~6 MB of it). A
+  Home Assistant camera would need that stack reversed and a streaming bridge
+  built, plus the car online to test — a substantial piece of its own. Captured
+  still photos from events are reachable now via `teyes.get_photo`.

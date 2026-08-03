@@ -53,6 +53,7 @@ SERVICE_LIST_GEOFENCES: Final = "list_geofences"
 SERVICE_SET_GEOFENCE: Final = "set_geofence"
 SERVICE_DELETE_GEOFENCE: Final = "delete_geofence"
 SERVICE_SEND_NAVIGATION: Final = "send_navigation"
+SERVICE_GET_PHOTO: Final = "get_photo"
 
 # Commands the head unit accepts, published to its topic as {type, message}.
 # Confirmed from the app bundle; the unit acts on them only while it is online.
