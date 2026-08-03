@@ -8,6 +8,7 @@ it is online.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timedelta
 from typing import Any
@@ -36,6 +37,10 @@ from .mqtt import MqttConnection, TeyesMqttClient
 from .telemetry import Telemetry, normalise, parse_location_field, parse_message
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class TeyesCommandError(Exception):
+    """A command could not be delivered to the car."""
 
 # Poll the app-update flag every Nth refresh (~hourly at the default interval).
 _UPDATE_EVERY = 60
@@ -107,6 +112,36 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not info or "hasUpdate" not in info:
             return None
         return bool(info.get("hasUpdate"))
+
+    def is_online(self, device_id: str) -> bool:
+        """Whether the head unit is reachable, from either source."""
+        for record in (self.state(device_id), self.car(device_id)):
+            value = record.get("isonline")
+            if value not in (None, ""):
+                return str(value) in ("1", "true", "True")
+        return False
+
+    async def async_send_command(
+        self, device_id: str, command: str, message: dict[str, Any] | None = None
+    ) -> None:
+        """Publish a command to a car over its telemetry socket.
+
+        The head unit only acts on commands while it is online, so this raises
+        when the socket is down or the car is unreachable rather than dropping
+        the command silently.
+        """
+        client = self._mqtt.get(device_id)
+        if client is None:
+            raise TeyesCommandError(
+                "Live connection is off; enable it in the integration options"
+            )
+        payload = json.dumps(
+            {"type": command, "message": message or {}}, separators=(",", ":")
+        )
+        if not await client.async_publish(f"{MQTT_CLIENT_PREFIX}{device_id}", payload):
+            raise TeyesCommandError(
+                "Not connected to the car; it must be online to accept commands"
+            )
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:

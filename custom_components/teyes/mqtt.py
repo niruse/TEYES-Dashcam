@@ -138,6 +138,20 @@ class TeyesMqttClient:
             if self._on_connected:
                 self._on_connected(connected)
 
+    async def async_publish(self, topic: str, payload: str) -> bool:
+        """Send a QoS-0 PUBLISH on the live socket.
+
+        The head unit subscribes to the app's topic to receive commands, so
+        this is how the integration drives it. Returns False when there is no
+        connection to send on.
+        """
+        ws = self._ws
+        if not self.connected or ws is None or ws.closed:
+            return False
+        body = _string(topic) + payload.encode()
+        await ws.send_bytes(_packet(PUBLISH, 0, body))
+        return True
+
     async def _run(self) -> None:
         """Connect, listen, and back off between failures."""
         backoff = _BACKOFF_START

@@ -35,6 +35,19 @@ scross 2014 Milana"), with:
 | `sensor.<car>_position_time` | Timestamp on the last GPS fix |
 | `sensor.<car>_last_report` | When the last live message arrived |
 
+### Controls
+
+While the car is online it also accepts commands:
+
+| Entity | What it does |
+| --- | --- |
+| `lock.<car>_screen` | Lock or unlock the head unit's screen |
+| `button.<car>_update_location` | Ask the car to report its position now |
+
+These are unavailable while the car is offline, since it cannot act on a
+command it never receives. The `teyes.send_command` action sends any other
+command the head unit understands — see [Extending it](#extending-it--the-features-that-need-the-car-online).
+
 The parked position comes from the account's own car list, so the tracker
 works without waiting for the car to come online. Altitude, satellites,
 mileage and voltage entities exist too, disabled by default: whether the head
@@ -139,9 +152,12 @@ what the car sends, so each becomes a real entity from real data.
   a dozen variants, including fixed-point integers) and keeps the whole raw
   message in the `Last car message` diagnostic entity and in the integration's
   diagnostics download. `tools/capture.py` records it directly.
-- **No controls yet** (wallpaper, radio). The cloud-side lists work
-  (`radio/list`, `wallpaper/token`), but the methods that act on the car are
-  obfuscated in the app bundle and only appear in live traffic. Capture them as
-  in [`tools/README.md`](tools/README.md), then drive them with `teyes.api_call`.
+- **Only some controls so far.** Commands ride the same live socket as the
+  telemetry — a small JSON message published to the car's topic. Lock/unlock
+  and locate are wired up; `lockscreen`, `unlockscreen`, `app_location` and
+  `close4g` are the confirmed commands. Radio, wallpaper and navigation live in
+  the app's lazily-loaded screens, so their exact payloads have to be captured
+  (see [`tools/README.md`](tools/README.md)) and can then be sent with
+  `teyes.send_command` before becoming their own entities.
 - **No video.** Whether a CC4 Pro exposes any stream remotely is still an open
   question; it may be local-only. `tools/README.md` says what to look for.

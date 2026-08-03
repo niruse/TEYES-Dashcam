@@ -108,6 +108,12 @@
       "app_version": { "name": "App version" },
       "last_report": { "name": "Last report" },
       "last_message": { "name": "Last car message" }
+    },
+    "lock": {
+      "screen": { "name": "Screen" }
+    },
+    "button": {
+      "locate": { "name": "Update location" }
     }
   },
   "services": {
@@ -134,6 +140,28 @@
         "params": {
           "name": "Parameters",
           "description": "Extra parameters. uid, imei, token, language and timezone are added automatically."
+        }
+      }
+    },
+    "send_command": {
+      "name": "Send a command to the car",
+      "description": "Publish a command to the head unit over its live connection. The car must be online. Known commands: lockscreen, unlockscreen, app_location, close4g; more can be captured from the app (see tools/).",
+      "fields": {
+        "entry_id": {
+          "name": "Account",
+          "description": "Which configured account to use. Defaults to the only one."
+        },
+        "device_id": {
+          "name": "Car",
+          "description": "Device id (imei) of the car. Defaults to the account's first car."
+        },
+        "command": {
+          "name": "Command",
+          "description": "The command type, for example lockscreen."
+        },
+        "message": {
+          "name": "Message",
+          "description": "The command's payload, if it needs one. Defaults to empty."
         }
       }
     }

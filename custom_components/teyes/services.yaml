@@ -36,3 +36,26 @@ api_call:
       example: '{"page": 1}'
       selector:
         object:
+
+send_command:
+  fields:
+    entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: teyes
+    device_id:
+      required: false
+      example: p1c25if16000100
+      selector:
+        text:
+    command:
+      required: true
+      example: lockscreen
+      selector:
+        text:
+    message:
+      required: false
+      example: '{}'
+      selector:
+        object:

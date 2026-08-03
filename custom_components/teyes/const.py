@@ -42,8 +42,15 @@ DEFAULT_ENABLE_PUSH: Final = True
 DEFAULT_COORD_SYSTEM: Final = COORD_WGS84
 
 SERVICE_API_CALL: Final = "api_call"
+SERVICE_SEND_COMMAND: Final = "send_command"
 
-PLATFORMS: Final = ["binary_sensor", "device_tracker", "sensor"]
+# Commands the head unit accepts, published to its topic as {type, message}.
+# Confirmed from the app bundle; the unit acts on them only while it is online.
+CMD_LOCK_SCREEN: Final = "lockscreen"
+CMD_UNLOCK_SCREEN: Final = "unlockscreen"
+CMD_LOCATE: Final = "app_location"
+
+PLATFORMS: Final = ["binary_sensor", "button", "device_tracker", "lock", "sensor"]
 
 # Both keys are embedded in the web bundle, so a standalone client can encrypt
 # its requests and read the replies. They are the vendor's, not a secret of
