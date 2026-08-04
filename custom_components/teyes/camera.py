@@ -60,6 +60,15 @@ class TeyesCamera(TeyesEntity, Camera):
         self._urls: dict[str, Any] = {}
         self._urls_at = 0.0
 
+    @property
+    def available(self) -> bool:
+        """There is only a feed to show while the car is online and streaming.
+
+        Unlike the command controls, a camera has nothing to offer offline, so
+        it reads unavailable then rather than showing a broken feed.
+        """
+        return super().available and self.coordinator.is_online(self._device_id)
+
     async def _async_urls(self) -> dict[str, Any]:
         """Return fresh play URLs, telling the car to start streaming first."""
         try:

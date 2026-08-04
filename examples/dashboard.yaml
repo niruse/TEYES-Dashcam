@@ -1,0 +1,145 @@
+title: Teyes
+views:
+- title: Suzuki S-Cross
+  path: car
+  icon: mdi:car
+  type: sections
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Location
+      icon: mdi:map-marker
+    - type: map
+      entities:
+      - device_tracker.p1c25if16000100
+      default_zoom: 14
+      hours_to_show: 24
+      grid_options:
+        columns: full
+    - type: tile
+      entity: sensor.p1c25if16000100_speed
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: sensor.p1c25if16000100_position_time
+      grid_options:
+        columns: 6
+  - type: grid
+    cards:
+    - type: heading
+      heading: Cameras
+      icon: mdi:cctv
+    - type: picture-entity
+      entity: camera.suzuki_scross_2014_milana_front_camera
+      name: Front
+      camera_view: live
+      grid_options:
+        columns: 6
+    - type: picture-entity
+      entity: camera.suzuki_scross_2014_milana_rear_camera
+      name: Rear
+      camera_view: live
+      grid_options:
+        columns: 6
+    - type: picture-entity
+      entity: camera.suzuki_scross_2014_milana_left_camera
+      name: Left
+      camera_view: live
+      grid_options:
+        columns: 6
+    - type: picture-entity
+      entity: camera.suzuki_scross_2014_milana_right_camera
+      name: Right
+      camera_view: live
+      grid_options:
+        columns: 6
+  - type: grid
+    cards:
+    - type: heading
+      heading: Controls
+      icon: mdi:gesture-tap-button
+    - type: tile
+      entity: lock.suzuki_scross_2014_milana_screen
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: switch.suzuki_scross_2014_milana_stealth_mode
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: button.suzuki_scross_2014_milana_update_location
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: button.suzuki_scross_2014_milana_disable_mobile_data
+      grid_options:
+        columns: 6
+  - type: grid
+    cards:
+    - type: heading
+      heading: Status
+      icon: mdi:information-outline
+    - type: tile
+      entity: binary_sensor.p1c25if16000100_online
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: binary_sensor.p1c25if16000100_ignition
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: sensor.suzuki_scross_2014_milana_signal
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: binary_sensor.suzuki_scross_2014_milana_sim
+      grid_options:
+        columns: 6
+    - type: entities
+      title: Details
+      entities:
+      - sensor.p1c25if16000100_ignition_off_since
+      - binary_sensor.suzuki_scross_2014_milana_privacy_mode
+      - binary_sensor.suzuki_scross_2014_milana_update_available
+      - sensor.suzuki_scross_2014_milana_subscription_expiry
+      - binary_sensor.p1c25if16000100_live_connection
+      grid_options:
+        columns: full
+  - type: grid
+    cards:
+    - type: heading
+      heading: Trips & alerts
+      icon: mdi:road-variant
+    - type: tile
+      entity: sensor.suzuki_scross_2014_milana_last_trip
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: sensor.suzuki_scross_2014_milana_recorded_trips
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: sensor.suzuki_scross_2014_milana_last_alarm
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: sensor.suzuki_scross_2014_milana_geofence_status
+      grid_options:
+        columns: 6
+  - type: grid
+    cards:
+    - type: heading
+      heading: About the unit
+      icon: mdi:chip
+    - type: entities
+      title: Device
+      entities:
+      - sensor.suzuki_scross_2014_milana_firmware_version
+      - sensor.suzuki_scross_2014_milana_mcu_version
+      - sensor.suzuki_scross_2014_milana_app_version
+      - sensor.suzuki_scross_2014_milana_paired_since
+      - sensor.suzuki_scross_2014_milana_cameras
+      - sensor.p1c25if16000100_last_report
+      grid_options:
+        columns: full
