@@ -53,11 +53,6 @@ class TeyesCommandButton(TeyesEntity, ButtonEntity):
         self.entity_description = description
         self._command = command
 
-    @property
-    def available(self) -> bool:
-        """A command only reaches the car while it is online."""
-        return super().available and self.coordinator.is_online(self._device_id)
-
     async def async_press(self) -> None:
         """Send the command."""
         try:

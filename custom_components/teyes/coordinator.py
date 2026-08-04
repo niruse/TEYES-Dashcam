@@ -140,14 +140,20 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         """Publish a command to a car over its telemetry socket.
 
-        The head unit only acts on commands while it is online, so this raises
-        when the socket is down or the car is unreachable rather than dropping
-        the command silently.
+        A command is dropped by the broker if the car is not subscribed, so
+        this refuses up front when the car is offline rather than reporting a
+        success the car never received. The entities stay usable regardless;
+        it is only the delivery that is gated on the car being reachable.
         """
         client = self._mqtt.get(device_id)
         if client is None:
             raise TeyesCommandError(
                 "Live connection is off; enable it in the integration options"
+            )
+        if not self.is_online(device_id):
+            raise TeyesCommandError(
+                "The car is offline; it must be connected to the Teyes cloud "
+                "(ignition on and its own internet) to receive commands"
             )
         payload = json.dumps(
             {"type": command, "message": message or {}}, separators=(",", ":")

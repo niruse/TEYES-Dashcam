@@ -40,11 +40,6 @@ class TeyesScreenLock(TeyesEntity, LockEntity):
         self._is_locked: bool | None = None
 
     @property
-    def available(self) -> bool:
-        """A command only reaches the car while it is online."""
-        return super().available and self.coordinator.is_online(self._device_id)
-
-    @property
     def is_locked(self) -> bool | None:
         """The last state asked for; None until first used."""
         return self._is_locked
