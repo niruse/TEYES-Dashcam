@@ -1,4 +1,4 @@
-# Teyes for Home Assistant
+# Teyes Dashcam for Home Assistant
 
 A custom integration for **Teyes** Android head units (built and tested against
 a **CC4 Pro**) that connects to the Teyes Online cloud the same way the vendor's

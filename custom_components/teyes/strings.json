@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "credentials": {
-        "title": "Teyes account",
+        "title": "Teyes Dashcam account",
         "description": "Sign in with the account you use on the Teyes portal.",
         "data": {
           "email": "Email",
@@ -47,7 +47,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Teyes options",
+        "title": "Teyes Dashcam options",
         "data": {
           "device_ids": "Cars",
           "scan_interval": "Polling interval (seconds)",

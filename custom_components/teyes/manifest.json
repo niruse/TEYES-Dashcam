@@ -1,6 +1,6 @@
 {
   "domain": "teyes",
-  "name": "Teyes",
+  "name": "Teyes Dashcam",
   "codeowners": ["@niruse"],
   "config_flow": true,
   "dependencies": ["ffmpeg"],
