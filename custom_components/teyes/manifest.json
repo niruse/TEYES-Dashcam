@@ -4,10 +4,10 @@
   "codeowners": ["@niruse"],
   "config_flow": true,
   "dependencies": ["ffmpeg"],
-  "documentation": "https://github.com/niruse/TEYES",
+  "documentation": "https://github.com/niruse/TEYES-Dashcam",
   "integration_type": "device",
   "iot_class": "cloud_push",
-  "issue_tracker": "https://github.com/niruse/TEYES/issues",
+  "issue_tracker": "https://github.com/niruse/TEYES-Dashcam/issues",
   "requirements": [],
   "version": "0.1.0"
 }
