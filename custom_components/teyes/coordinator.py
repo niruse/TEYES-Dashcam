@@ -39,6 +39,7 @@ from .telemetry import Telemetry, normalise, parse_location_field, parse_message
 
 _LOGGER = logging.getLogger(__name__)
 ONLINE_PUSH_WINDOW = 180
+ONLINE_ACC_WINDOW = 1200
 
 
 class TeyesCommandError(Exception):
@@ -140,8 +141,14 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         unavailable the entire time. Without recent pushes, fall back to the flag.
         """
         seen = self.last_push.get(device_id)
-        if seen is not None and time.monotonic() - seen < ONLINE_PUSH_WINDOW:
-            return True
+        if seen is not None:
+            age = time.monotonic() - seen
+            if age < ONLINE_PUSH_WINDOW:
+                return True
+            # Parked with the unit on, it barely pushes (12 min of silence seen):
+            # its last word being "ignition on" keeps it online for a while longer.
+            if age < ONLINE_ACC_WINDOW and self.telemetry_fields(device_id).get("acc") is True:
+                return True
         for record in (self.state(device_id), self.car(device_id)):
             value = record.get("isonline")
             if value not in (None, ""):
