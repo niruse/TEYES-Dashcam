@@ -58,9 +58,7 @@ SENSORS: tuple[TeyesBinarySensorDescription, ...] = (
         key="online",
         translation_key="online",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
-        value_fn=lambda c, d: _flag(c.state(d), "isonline")
-        if "isonline" in c.state(d)
-        else _flag(c.car(d), "isonline"),
+        value_fn=lambda c, d: c.is_online(d),
     ),
     TeyesBinarySensorDescription(
         key="ignition",
