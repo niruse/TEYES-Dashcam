@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -37,6 +38,8 @@ from .mqtt import MqttConnection, TeyesMqttClient
 from .telemetry import Telemetry, normalise, parse_location_field, parse_message
 
 _LOGGER = logging.getLogger(__name__)
+ONLINE_PUSH_WINDOW = 180
+ONLINE_ACC_WINDOW = 1200
 
 
 class TeyesCommandError(Exception):
@@ -81,6 +84,8 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.signal: dict[str, Any] = {}
         self.last_alarm: dict[str, str] = {}
         self._mqtt: dict[str, TeyesMqttClient] = {}
+        # When the car last pushed a live message (monotonic seconds).
+        self.last_push: dict[str, float] = {}
         super().__init__(
             hass,
             _LOGGER,
@@ -128,7 +133,22 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return value if isinstance(value, dict) else {}
 
     def is_online(self, device_id: str) -> bool:
-        """Whether the head unit is reachable, from either source."""
+        """Whether the head unit is reachable.
+
+        A live message in the last ONLINE_PUSH_WINDOW seconds wins: the cloud's
+        `isonline` flag lagged a whole drive behind (2026-10-17: ignition on and
+        live telemetry arriving, `isonline` still "0"), which kept the cameras
+        unavailable the entire time. Without recent pushes, fall back to the flag.
+        """
+        seen = self.last_push.get(device_id)
+        if seen is not None:
+            age = time.monotonic() - seen
+            if age < ONLINE_PUSH_WINDOW:
+                return True
+            # Parked with the unit on, it barely pushes (12 min of silence seen):
+            # its last word being "ignition on" keeps it online for a while longer.
+            if age < ONLINE_ACC_WINDOW and self.telemetry_fields(device_id).get("acc") is True:
+                return True
         for record in (self.state(device_id), self.car(device_id)):
             value = record.get("isonline")
             if value not in (None, ""):
@@ -369,5 +389,6 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     fresh.fields["acc"] = state == "on"
             merged = {**self.telemetry_fields(device_id), **fresh.fields}
             self.telemetry[device_id] = Telemetry(raw, merged)
+        self.last_push[device_id] = time.monotonic()
 
         self.async_update_listeners()

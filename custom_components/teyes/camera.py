@@ -80,7 +80,7 @@ class TeyesCamera(TeyesEntity, Camera):
         except TeyesCommandError as err:
             # The car is offline; ask for the URLs anyway so the entity still
             # behaves, they simply will not carry video.
-            _LOGGER.debug("Could not start live for %s: %s", self._device_id, err)
+            _LOGGER.warning("Could not start live for %s: %s", self._device_id, err)
         if not self._urls or (time.monotonic() - self._urls_at) > _URL_TTL:
             app_version = self.car.get("app_version") or 0
             self._urls = await self.coordinator.client.async_get_lives(
