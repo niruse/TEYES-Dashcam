@@ -12,6 +12,17 @@ into Home Assistant, and the position shows even while a car is parked.
 > Unofficial. Teyes provides no public API; everything here was worked out from
 > the portal's own web bundle and its traffic.
 
+## ☕ Support
+
+If you found this project helpful, you can [buy me a coffee](https://coff.ee/niruse)!
+
+## 🚨 Disclaimer
+
+> This is an unofficial integration. You are responsible for the use of your credentials and your
+> data. The author and contributors take no responsibility for any issues, account restrictions or
+> data loss. Use at your own risk.
+
+
 ## What you get
 
 ### Cameras
