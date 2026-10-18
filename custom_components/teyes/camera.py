@@ -70,29 +70,38 @@ class TeyesCamera(TeyesEntity, Camera):
         return super().available and self.coordinator.is_online(self._device_id)
 
     async def _async_urls(self) -> dict[str, Any]:
-        """Return fresh play URLs, telling the car to start streaming first."""
-        try:
-            await self.coordinator.async_send_command(
-                self._device_id,
-                CMD_START_LIVE,
-                {"type": self._direction, "name": ""},
-            )
-        except TeyesCommandError as err:
-            # The car is offline; ask for the URLs anyway so the entity still
-            # behaves, they simply will not carry video.
-            _LOGGER.warning("Could not start live for %s: %s", self._device_id, err)
+        """Fetch the play URLs, then tell the car to start pushing to the matching route.
+
+        `lives/getLives` returns routes, each with a `push_url` (where the car must publish,
+        RTMP) and the play URLs that serve that same stream. The car only publishes when
+        `app_start_live` carries that push URL in `name`, plus the size/mirror fields the
+        official web app sends (captured from online.teyes.cn, 2026-10-18). We used to send
+        `name: ""`, so the car never published and every play URL answered 404. With the push
+        URL, FLV carries video within ~3 s; HLS needs a few more seconds for segments.
+        """
         if not self._urls or (time.monotonic() - self._urls_at) > _URL_TTL:
             app_version = self.car.get("app_version") or 0
             self._urls = await self.coordinator.client.async_get_lives(
                 self._device_id, self._direction, app_version=app_version
             )
             self._urls_at = time.monotonic()
+        push = self._urls.get("push_url")
+        try:
+            await self.coordinator.async_send_command(
+                self._device_id,
+                CMD_START_LIVE,
+                {"type": self._direction, "name": push or "", "width": 1920, "height": 1080,
+                 "isMirror": 0, "showCameraTop": "0"},
+            )
+        except TeyesCommandError as err:
+            # The car is offline; the URLs simply will not carry video.
+            _LOGGER.warning("Could not start live for %s: %s", self._device_id, err)
         return self._urls
 
     async def stream_source(self) -> str | None:
-        """The URL Home Assistant should play — HLS, falling back to FLV."""
+        """FLV first (video within seconds of the start command), HLS as the fallback."""
         urls = await self._async_urls()
-        return urls.get("hls_play_url") or urls.get("flv_play_url")
+        return urls.get("flv_play_url") or urls.get("hls_play_url")
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
