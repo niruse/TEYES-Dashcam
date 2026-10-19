@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
@@ -114,6 +114,7 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._live_started: dict[str, float] = {}
         self._live_stopped: dict[str, float] = {}
         self._live_watched: dict[str, Callable[[], bool]] = {}
+        self._live_on_stop: dict[str, Callable[[], Awaitable[None]]] = {}
         self._live_locks: dict[str, asyncio.Lock] = {}
         self._live_idle: dict[str, Callable[[], None]] = {}
         super().__init__(
@@ -367,13 +368,16 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         *,
         take_over: bool,
         watched: Callable[[], bool],
+        on_stop: Callable[[], Awaitable[None]],
     ) -> bool:
         """Make the car push `direction`; False when another camera keeps the car.
 
         `take_over` is for someone opening this camera: whatever else is live is
         stopped first. Without it (a dashboard still) the car is only started when it
         is pushing nothing, so the camera cards no longer fight over the one upload.
-        `watched` tells whether the stream is being played, which holds off the idle stop.
+        `watched` tells whether the stream is being played, which holds off the idle stop;
+        `on_stop` runs when the car stops pushing this camera (the entity ends its HA
+        stream, which would otherwise retry the dead URL for hours).
         Raises TeyesCommandError when the car cannot be reached.
         """
         async with self._live_locks.setdefault(device_id, asyncio.Lock()):
@@ -389,17 +393,21 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 since_stop = time.monotonic() - self._live_stopped.get(device_id, -LIVE_SWITCH_GAP)
                 if since_stop < LIVE_SWITCH_GAP:
                     await asyncio.sleep(LIVE_SWITCH_GAP - since_stop)
-                await self.async_send_command(
-                    device_id,
-                    CMD_START_LIVE,
-                    # The push URL from getLives plus the fields the official web app
-                    # sends; without the URL the car never publishes.
-                    {"type": direction, "name": push_url, "width": 1920, "height": 1080,
-                     "isMirror": 0, "showCameraTop": "0"},
-                )
+                # The push URL from getLives plus the fields the official web app
+                # sends; without the URL the car never publishes.
+                message = {"type": direction, "name": push_url, "width": 1920,
+                           "height": 1080, "isMirror": 0, "showCameraTop": "0"}
+                try:
+                    await self.async_send_command(device_id, CMD_START_LIVE, message)
+                except TeyesCommandError:
+                    # The socket drops for a moment now and then (10-19 15:02: "not
+                    # connected" with the car online); one retry covers it.
+                    await asyncio.sleep(3)
+                    await self.async_send_command(device_id, CMD_START_LIVE, message)
                 self.live_camera[device_id] = direction
                 self._live_started[device_id] = time.monotonic()
             self._live_watched[device_id] = watched
+            self._live_on_stop[device_id] = on_stop
             self._schedule_idle_stop(device_id)
             return True
 
@@ -420,6 +428,11 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except TeyesCommandError:
             pass  # offline: it is not pushing anyway
         self._live_stopped[device_id] = time.monotonic()
+        if on_stop := self._live_on_stop.pop(device_id, None):
+            try:
+                await on_stop()
+            except Exception:  # noqa: BLE001 - never let a stream teardown block the switch
+                _LOGGER.debug("Ending the stream for %s failed", device_id, exc_info=True)
 
     def _schedule_idle_stop(self, device_id: str) -> None:
         """(Re)arm the idle stop; every ask pushes it out by LIVE_IDLE_STOP."""

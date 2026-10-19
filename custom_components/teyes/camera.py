@@ -76,8 +76,18 @@ class TeyesCamera(TeyesEntity, Camera):
         return super().available and self.coordinator.is_online(self._device_id)
 
     def _watched(self) -> bool:
-        """Whether someone is playing this camera's stream right now."""
-        return bool(self.stream and self.stream.outputs())
+        """Whether someone is playing this camera's stream right now.
+
+        A stream whose source died keeps its outputs while the worker retries (seen
+        retrying an expired URL for 6 h), so it only counts while it is up.
+        """
+        return bool(self.stream and self.stream.available and self.stream.outputs())
+
+    async def _async_end_stream(self) -> None:
+        """The car stopped pushing this camera: end the HA stream rather than let it
+        retry a dead URL. The next viewing restarts it (async_create_stream)."""
+        if self.stream is not None:
+            await self.stream.stop()
 
     async def _async_go_live(self, *, take_over: bool) -> dict[str, Any] | None:
         """Fetch the play URLs and get the car pushing this camera.
@@ -100,6 +110,7 @@ class TeyesCamera(TeyesEntity, Camera):
                 self._urls.get("push_url") or "",
                 take_over=take_over,
                 watched=self._watched,
+                on_stop=self._async_end_stream,
             )
         except TeyesCommandError as err:
             _LOGGER.warning("Could not start live for %s: %s", self._device_id, err)
