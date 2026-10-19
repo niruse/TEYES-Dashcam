@@ -8,17 +8,22 @@ online for the URLs to carry actual video.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
 
+import aiohttp
+
 from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.stream import Stream
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import carinfo
-from .const import CAMERA_DIRECTIONS, CMD_START_LIVE, CMD_STOP_LIVE, DOMAIN
+from .const import CAMERA_DIRECTIONS, DOMAIN
 from .coordinator import TeyesCommandError, TeyesCoordinator
 from .entity import TeyesEntity
 
@@ -59,6 +64,7 @@ class TeyesCamera(TeyesEntity, Camera):
         self._attr_translation_key = f"camera_{direction}"
         self._urls: dict[str, Any] = {}
         self._urls_at = 0.0
+        self._last_image: bytes | None = None
 
     @property
     def available(self) -> bool:
@@ -69,15 +75,17 @@ class TeyesCamera(TeyesEntity, Camera):
         """
         return super().available and self.coordinator.is_online(self._device_id)
 
-    async def _async_urls(self) -> dict[str, Any]:
-        """Fetch the play URLs, then tell the car to start pushing to the matching route.
+    def _watched(self) -> bool:
+        """Whether someone is playing this camera's stream right now."""
+        return bool(self.stream and self.stream.outputs())
 
-        `lives/getLives` returns routes, each with a `push_url` (where the car must publish,
-        RTMP) and the play URLs that serve that same stream. The car only publishes when
-        `app_start_live` carries that push URL in `name`, plus the size/mirror fields the
-        official web app sends (captured from online.teyes.cn, 2026-10-18). We used to send
-        `name: ""`, so the car never published and every play URL answered 404. With the push
-        URL, FLV carries video within ~3 s; HLS needs a few more seconds for segments.
+    async def _async_go_live(self, *, take_over: bool) -> dict[str, Any] | None:
+        """Fetch the play URLs and get the car pushing this camera.
+
+        `lives/getLives` returns routes, each with a `push_url` (where the car must publish)
+        and the play URLs that serve that same stream; the coordinator sends the start with
+        that push URL and keeps the car on one camera at a time. Returns None when the car
+        stays on another camera (take_over=False) or cannot be reached.
         """
         if not self._urls or (time.monotonic() - self._urls_at) > _URL_TTL:
             app_version = self.car.get("app_version") or 0
@@ -85,48 +93,86 @@ class TeyesCamera(TeyesEntity, Camera):
                 self._device_id, self._direction, app_version=app_version
             )
             self._urls_at = time.monotonic()
-        push = self._urls.get("push_url")
         try:
-            await self.coordinator.async_send_command(
+            live = await self.coordinator.async_live(
                 self._device_id,
-                CMD_START_LIVE,
-                {"type": self._direction, "name": push or "", "width": 1920, "height": 1080,
-                 "isMirror": 0, "showCameraTop": "0"},
+                self._direction,
+                self._urls.get("push_url") or "",
+                take_over=take_over,
+                watched=self._watched,
             )
         except TeyesCommandError as err:
-            # The car is offline; the URLs simply will not carry video.
             _LOGGER.warning("Could not start live for %s: %s", self._device_id, err)
-        return self._urls
+            return None
+        return self._urls if live else None
+
+    @staticmethod
+    def _source(urls: dict[str, Any] | None) -> str | None:
+        """FLV first (video within seconds of the start), HLS as the fallback."""
+        return (urls.get("flv_play_url") or urls.get("hls_play_url")) if urls else None
+
+    async def _async_wait_for_video(self, url: str, timeout: float = 20) -> None:
+        """Wait until the play URL serves video: the car takes 5-20 s to start pushing,
+        and a stream opened before that fails and only retries 10+ s later.
+
+        The CDN answers 200 at once even when nothing is being pushed and then sends no
+        body, so only actual bytes count (an FLV starts with b"FLV")."""
+        session = async_get_clientsession(self.hass)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=5, sock_read=4)
+                ) as resp:
+                    if resp.status == 200 and await resp.content.read(3):
+                        return
+            except (aiohttp.ClientError, TimeoutError):
+                pass
+            await asyncio.sleep(1)
+
+    async def async_create_stream(self) -> Stream | None:
+        """Switch the car to this camera every time someone opens it.
+
+        Home Assistant builds a camera's Stream once and reuses it, with the URL it got
+        first, for every later viewer — so without this a second viewing never asked the
+        car to start again, and played a URL whose auth key may have expired.
+        """
+        source = self._source(await self._async_go_live(take_over=True))
+        if source:
+            await self._async_wait_for_video(source)
+            if self.stream is not None and self.stream.source != source:
+                self.stream.update_source(source)
+        return await super().async_create_stream()
 
     async def stream_source(self) -> str | None:
-        """FLV first (video within seconds of the start command), HLS as the fallback."""
-        urls = await self._async_urls()
-        return urls.get("flv_play_url") or urls.get("hls_play_url")
+        """The play URL, with the car switched to this camera."""
+        return self._source(await self._async_go_live(take_over=True))
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """A still frame, pulled from the FLV stream with ffmpeg."""
-        urls = await self._async_urls()
-        source = urls.get("flv_play_url") or urls.get("hls_play_url")
+        """A still frame pulled from the stream with ffmpeg.
+
+        A still never switches the car away from another camera: it then shows the last
+        frame it got, so a dashboard of camera cards does not keep flipping the car.
+        """
+        source = self._source(await self._async_go_live(take_over=False))
         if not source:
-            return None
+            return self._last_image
         try:
             from homeassistant.components.ffmpeg import async_get_image
 
-            return await async_get_image(
+            image = await async_get_image(
                 self.hass, source, width=width, height=height
             )
         except Exception as err:  # noqa: BLE001 - ffmpeg may be absent/timeout
             _LOGGER.debug("Could not grab a still for %s: %s", self.entity_id, err)
-            return None
+            image = None
+        if image:
+            self._last_image = image
+        return image or self._last_image
 
     async def async_will_remove_from_hass(self) -> None:
-        """Tell the car to stop streaming when the entity goes away."""
-        try:
-            await self.coordinator.async_send_command(
-                self._device_id, CMD_STOP_LIVE, {"type": self._direction, "name": ""}
-            )
-        except TeyesCommandError:
-            pass
+        """Stop the push if it is this camera's when the entity goes away."""
+        await self.coordinator.async_release_live(self._device_id, self._direction)
         await super().async_will_remove_from_hass()
