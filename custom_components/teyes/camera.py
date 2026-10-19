@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
@@ -32,6 +33,9 @@ _LOGGER = logging.getLogger(__name__)
 # Re-fetch the play URLs once they are this old; the URL's own auth_key lasts
 # a while, but a fresh one is cheap and avoids a mid-view expiry.
 _URL_TTL = 120
+# Write the last frame to disk at most this often (it is shown while the car is offline
+# and survives restarts).
+_SAVE_EVERY = 60
 
 
 async def async_setup_entry(
@@ -65,15 +69,56 @@ class TeyesCamera(TeyesEntity, Camera):
         self._urls: dict[str, Any] = {}
         self._urls_at = 0.0
         self._last_image: bytes | None = None
+        self._saved_at = 0.0
+
+    @property
+    def _image_path(self) -> str:
+        return self.hass.config.path(
+            ".storage", f"{DOMAIN}.{self._device_id}.{self._direction}.jpg"
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """Bring back the last frame from before a restart."""
+        await super().async_added_to_hass()
+
+        def _load() -> bytes | None:
+            try:
+                with open(self._image_path, "rb") as file:
+                    return file.read()
+            except OSError:
+                return None
+
+        self._last_image = await self.hass.async_add_executor_job(_load)
 
     @property
     def available(self) -> bool:
-        """There is only a feed to show while the car is online and streaming.
+        """Live while the car is online; offline, the last frame it sent.
 
-        Unlike the command controls, a camera has nothing to offer offline, so
-        it reads unavailable then rather than showing a broken feed.
+        With no frame yet there is nothing to show offline, so it reads
+        unavailable then rather than an empty card.
         """
-        return super().available and self.coordinator.is_online(self._device_id)
+        if not super().available:
+            return False
+        return self.coordinator.is_online(self._device_id) or self._last_image is not None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"live": self.coordinator.is_online(self._device_id)}
+
+    def _keep_image(self, image: bytes) -> None:
+        """Remember a frame, and write it to disk now and then."""
+        self._last_image = image
+        if time.monotonic() - self._saved_at < _SAVE_EVERY:
+            return
+        self._saved_at = time.monotonic()
+
+        def _save() -> None:
+            tmp = self._image_path + ".tmp"
+            with open(tmp, "wb") as file:
+                file.write(image)
+            os.replace(tmp, self._image_path)
+
+        self.hass.async_add_executor_job(_save)
 
     def _watched(self) -> bool:
         """Whether someone is playing this camera's stream right now.
@@ -87,6 +132,14 @@ class TeyesCamera(TeyesEntity, Camera):
         """The car stopped pushing this camera: end the HA stream rather than let it
         retry a dead URL. The next viewing restarts it (async_create_stream)."""
         if self.stream is not None:
+            # Keep its last frame for the card first: the car is about to go quiet.
+            if self._watched():
+                try:
+                    if image := await self.stream.async_get_image():
+                        self._saved_at = 0.0
+                        self._keep_image(image)
+                except Exception:  # noqa: BLE001 - a missing frame must not block the stop
+                    pass
             await self.stream.stop()
 
     async def _async_go_live(self, *, take_over: bool) -> dict[str, Any] | None:
@@ -148,7 +201,9 @@ class TeyesCamera(TeyesEntity, Camera):
         first, for every later viewer — so without this a second viewing never asked the
         car to start again, and played a URL whose auth key may have expired.
         """
-        source = self._source(await self._async_go_live(take_over=True))
+        source = None
+        if self.coordinator.is_online(self._device_id):
+            source = self._source(await self._async_go_live(take_over=True))
         if source:
             await self._async_wait_for_video(source)
             if self.stream is not None and self.stream.source != source:
@@ -157,30 +212,41 @@ class TeyesCamera(TeyesEntity, Camera):
 
     async def stream_source(self) -> str | None:
         """The play URL, with the car switched to this camera."""
+        if not self.coordinator.is_online(self._device_id):
+            return None
         return self._source(await self._async_go_live(take_over=True))
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """A still frame pulled from the stream with ffmpeg.
+        """A still frame: from the playing stream, else pulled with ffmpeg.
 
-        A still never switches the car away from another camera: it then shows the last
-        frame it got, so a dashboard of camera cards does not keep flipping the car.
+        A still never switches the car away from another camera, and the car offline
+        is not asked at all: both show the last frame (kept on disk across restarts),
+        so a dashboard of camera cards neither flips the car nor goes blank.
+        Frames are kept full size; Home Assistant scales them for each card.
         """
-        source = self._source(await self._async_go_live(take_over=False))
-        if not source:
+        if not self.coordinator.is_online(self._device_id):
             return self._last_image
-        try:
-            from homeassistant.components.ffmpeg import async_get_image
+        image = None
+        if self._watched():
+            try:
+                image = await self.stream.async_get_image()
+            except Exception:  # noqa: BLE001 - fall back to ffmpeg
+                image = None
+        if image is None:
+            source = self._source(await self._async_go_live(take_over=False))
+            if not source:
+                return self._last_image
+            try:
+                from homeassistant.components.ffmpeg import async_get_image
 
-            image = await async_get_image(
-                self.hass, source, width=width, height=height
-            )
-        except Exception as err:  # noqa: BLE001 - ffmpeg may be absent/timeout
-            _LOGGER.debug("Could not grab a still for %s: %s", self.entity_id, err)
-            image = None
+                image = await async_get_image(self.hass, source)
+            except Exception as err:  # noqa: BLE001 - ffmpeg may be absent/timeout
+                _LOGGER.debug("Could not grab a still for %s: %s", self.entity_id, err)
+                image = None
         if image:
-            self._last_image = image
+            self._keep_image(image)
         return image or self._last_image
 
     async def async_will_remove_from_hass(self) -> None:
