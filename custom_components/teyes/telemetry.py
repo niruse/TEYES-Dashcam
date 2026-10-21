@@ -50,6 +50,16 @@ class Telemetry:
         return bool(self.fields)
 
 
+def _real_position(lat: float | None, lon: float | None) -> bool:
+    """A position, not the unit's "no fix" filler.
+
+    Without a fix the head unit sends 0,0 (seen 2026-10-20 three times in a
+    day): taken as a position it put the car in the Gulf of Guinea. Then the
+    last real position is kept instead.
+    """
+    return lat is not None and lon is not None and not (abs(lat) < 0.01 and abs(lon) < 0.01)
+
+
 def parse_location_field(value: Any, coordinate_system: str) -> dict[str, Any]:
     """Read the `location` string a `selectCar` record carries.
 
@@ -64,7 +74,7 @@ def parse_location_field(value: Any, coordinate_system: str) -> dict[str, Any]:
         if index < len(parts) and (number := _number(parts[index])) is not None:
             reading[name] = number
     lat, lon = _rescale(reading.get("latitude"), reading.get("longitude"))
-    if lat is None or lon is None:
+    if not _real_position(lat, lon):
         return {}
     if coordinate_system == COORD_GCJ02:
         lat, lon = _gcj02_to_wgs84(lat, lon)
@@ -94,7 +104,7 @@ def normalise(raw: Any, coordinate_system: str) -> Telemetry:
     latitude = _number(_pick(flat, _LATITUDE))
     longitude = _number(_pick(flat, _LONGITUDE))
     latitude, longitude = _rescale(latitude, longitude)
-    if latitude is not None and longitude is not None:
+    if _real_position(latitude, longitude):
         if coordinate_system == COORD_GCJ02:
             latitude, longitude = _gcj02_to_wgs84(latitude, longitude)
         fields["latitude"] = round(latitude, 7)
@@ -111,7 +121,7 @@ def normalise(raw: Any, coordinate_system: str) -> Telemetry:
         if (value := _number(_pick(flat, names))) is not None:
             fields[key] = value
 
-    if (when := _timestamp(_pick(flat, _GPS_TIME))) is not None:
+    if "latitude" in fields and (when := _timestamp(_pick(flat, _GPS_TIME))) is not None:
         fields["gps_time"] = when
     if (acc := _boolean(_pick(flat, _ACC))) is not None:
         fields["acc"] = acc
