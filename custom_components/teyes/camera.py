@@ -33,6 +33,8 @@ _LOGGER = logging.getLogger(__name__)
 # Re-fetch the play URLs once they are this old; the URL's own auth_key lasts
 # a while, but a fresh one is cheap and avoids a mid-view expiry.
 _URL_TTL = 120
+# How long a watched stream may be down (the car's link dropped) before it is ended.
+DROP_TOLERANCE = 600
 # Write the last frame to disk at most this often (it is shown while the car is offline
 # and survives restarts).
 _SAVE_EVERY = 60
@@ -69,6 +71,7 @@ class TeyesCamera(TeyesEntity, Camera):
         self._urls: dict[str, Any] = {}
         self._urls_at = 0.0
         self._last_image: bytes | None = None
+        self._down_since: float | None = None
         self._saved_at = 0.0
 
     @property
@@ -124,9 +127,20 @@ class TeyesCamera(TeyesEntity, Camera):
         """Whether someone is playing this camera's stream right now.
 
         A stream whose source died keeps its outputs while the worker retries (seen
-        retrying an expired URL for 6 h), so it only counts while it is up.
+        retrying an expired URL for 6 h). A short drop is not that: the unit's link
+        comes back within minutes, so a stream that went down counts as watched for
+        DROP_TOLERANCE more -- long enough for the car to return and the start to be
+        re-sent (auto-renew) -- and only then is it ended.
         """
-        return bool(self.stream and self.stream.available and self.stream.outputs())
+        if not (self.stream and self.stream.outputs()):
+            self._down_since = None
+            return False
+        if self.stream.available:
+            self._down_since = None
+            return True
+        if self._down_since is None:
+            self._down_since = time.monotonic()
+        return time.monotonic() - self._down_since < DROP_TOLERANCE
 
     async def _async_end_stream(self) -> None:
         """The car stopped pushing this camera: end the HA stream rather than let it

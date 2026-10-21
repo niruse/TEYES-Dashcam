@@ -115,6 +115,7 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._live_stopped: dict[str, float] = {}
         self._live_watched: dict[str, Callable[[], bool]] = {}
         self._live_on_stop: dict[str, Callable[[], Awaitable[None]]] = {}
+        self._live_message: dict[str, dict[str, Any]] = {}
         self._live_locks: dict[str, asyncio.Lock] = {}
         self._live_idle: dict[str, Callable[[], None]] = {}
         super().__init__(
@@ -412,11 +413,24 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await asyncio.sleep(3)
                     await self.async_send_command(device_id, CMD_START_LIVE, message)
                 self.live_camera[device_id] = direction
+                self._live_message[device_id] = message
                 self._live_started[device_id] = time.monotonic()
             self._live_watched[device_id] = watched
             self._live_on_stop[device_id] = on_stop
             self._schedule_idle_stop(device_id)
             return True
+
+    async def _async_resume_live(self, device_id: str) -> None:
+        message = self._live_message.get(device_id)
+        if not message or device_id not in self.live_camera:
+            return
+        async with self._live_locks.setdefault(device_id, asyncio.Lock()):
+            try:
+                await self.async_send_command(device_id, CMD_START_LIVE, message)
+                self._live_started[device_id] = time.monotonic()
+                _LOGGER.debug("Live camera of %s resumed after a drop", device_id)
+            except TeyesCommandError as err:
+                _LOGGER.debug("Could not resume live for %s: %s", device_id, err)
 
     async def async_release_live(self, device_id: str, direction: str) -> None:
         """Stop the push if it is this camera's (the entity is going away)."""
@@ -553,7 +567,16 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     fresh.fields["acc"] = state == "on"
             merged = {**self.telemetry_fields(device_id), **fresh.fields}
             self.telemetry[device_id] = Telemetry(raw, merged)
+        back = (
+            device_id in self.live_camera
+            and time.monotonic() - self.last_push.get(device_id, 0.0) > ONLINE_PUSH_WINDOW
+        )
         self.last_push[device_id] = time.monotonic()
+        if back:
+            # Auto-renew: the car is back after a drop while one of its cameras is
+            # in use -- start it again now rather than at the next viewer request.
+            self._live_started.pop(device_id, None)
+            self.hass.async_create_task(self._async_resume_live(device_id))
         if isinstance(acc := self.telemetry_fields(device_id).get("acc"), bool):
             self.last_acc[device_id] = acc
         self._presence_store.async_delay_save(self._presence_snapshot, 30)
