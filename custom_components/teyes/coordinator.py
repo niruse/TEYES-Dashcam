@@ -322,8 +322,10 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _apply_parked_location(self, device_id: str) -> None:
         """Seed a car's telemetry from its parked position in `selectCar`.
 
-        A live message always wins; this only fills what the car has not
-        pushed, so a parked car still shows on the map.
+        The newer position wins. A live message usually is newer, but the unit is
+        often online only for a few minutes at start and stop and pushes no
+        position then (2026-10-21: it parked in another city, the cloud's
+        parked position had it, and the tracker kept yesterday's live fix).
         """
         parked = parse_location_field(
             self.car(device_id).get("location"), self.coordinate_system
@@ -332,7 +334,12 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         existing = self.telemetry_fields(device_id)
         raw = (self.telemetry.get(device_id) or Telemetry(None, {})).raw
-        self.telemetry[device_id] = Telemetry(raw, {**parked, **existing})
+        if (parked.get("gps_time") or "") > (existing.get("gps_time") or ""):
+            # Both are ISO UTC strings, so they compare in time order.
+            merged = {**existing, **parked}
+        else:
+            merged = {**parked, **existing}
+        self.telemetry[device_id] = Telemetry(raw, merged)
 
     # ── telemetry push ────────────────────────────────────────────────────
 
