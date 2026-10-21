@@ -8,15 +8,19 @@ it is online.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -25,6 +29,8 @@ from .const import (
     CONF_COORD_SYSTEM,
     CONF_DEVICE_IDS,
     CONF_ENABLE_PUSH,
+    CMD_START_LIVE,
+    CMD_STOP_LIVE,
     CONF_SCAN_INTERVAL,
     DEFAULT_COORD_SYSTEM,
     DEFAULT_ENABLE_PUSH,
@@ -40,6 +46,16 @@ from .telemetry import Telemetry, normalise, parse_location_field, parse_message
 _LOGGER = logging.getLogger(__name__)
 ONLINE_PUSH_WINDOW = 180
 ONLINE_ACC_WINDOW = 1200
+# The head unit pushes ONE camera at a time (measured 2026-10-19): a start for a second
+# camera is ignored while one is live, and a start sent within ~3 s of a stop is ignored
+# too (4-5 s always worked). Switching is therefore stop, wait, start.
+LIVE_SWITCH_GAP = 5
+# A live camera uploads ~2 Mbit/s over the car's own SIM; stop it once nothing has
+# asked for it, and nobody is playing it, for this long.
+LIVE_IDLE_STOP = 120
+# Re-send the start this often while the camera is in use, in case the car dropped the
+# push (ignition cycle, lost signal). Re-sending to a live camera does not interrupt it.
+LIVE_RESEND = 60
 
 
 class TeyesCommandError(Exception):
@@ -84,8 +100,24 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.signal: dict[str, Any] = {}
         self.last_alarm: dict[str, str] = {}
         self._mqtt: dict[str, TeyesMqttClient] = {}
-        # When the car last pushed a live message (monotonic seconds).
+        # When the car last pushed a live message (monotonic seconds), and its
+        # last ignition word. Both are kept across restarts (see
+        # async_restore_presence) so a restart does not read a car that was
+        # online a minute ago as offline until it next pushes.
         self.last_push: dict[str, float] = {}
+        self.last_acc: dict[str, bool] = {}
+        self._presence_store: Store[dict[str, Any]] = Store(
+            hass, 1, f"{DOMAIN}.{entry.entry_id}.presence"
+        )
+        # The camera each car is pushing, and its bookkeeping (see async_live).
+        self.live_camera: dict[str, str] = {}
+        self._live_started: dict[str, float] = {}
+        self._live_stopped: dict[str, float] = {}
+        self._live_watched: dict[str, Callable[[], bool]] = {}
+        self._live_on_stop: dict[str, Callable[[], Awaitable[None]]] = {}
+        self._live_message: dict[str, dict[str, Any]] = {}
+        self._live_locks: dict[str, asyncio.Lock] = {}
+        self._live_idle: dict[str, Callable[[], None]] = {}
         super().__init__(
             hass,
             _LOGGER,
@@ -147,13 +179,42 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return True
             # Parked with the unit on, it barely pushes (12 min of silence seen):
             # its last word being "ignition on" keeps it online for a while longer.
-            if age < ONLINE_ACC_WINDOW and self.telemetry_fields(device_id).get("acc") is True:
+            acc = self.telemetry_fields(device_id).get("acc", self.last_acc.get(device_id))
+            if age < ONLINE_ACC_WINDOW and acc is True:
                 return True
         for record in (self.state(device_id), self.car(device_id)):
             value = record.get("isonline")
             if value not in (None, ""):
                 return str(value) in ("1", "true", "True")
         return False
+
+    async def async_restore_presence(self) -> None:
+        """Carry the last-push time over a restart.
+
+        After a restart the cloud's `isonline` flag is all there is until the car
+        pushes again, and parked with the unit on it can stay silent for 12+ min
+        while that flag lags (2026-10-18: cameras unavailable for minutes after
+        every restart). The push time is stored as wall-clock seconds and mapped
+        back onto the monotonic clock, so the same windows apply as if Home
+        Assistant had never stopped; anything older than ONLINE_ACC_WINDOW is dropped.
+        """
+        data = await self._presence_store.async_load() or {}
+        now_wall, now_mono = time.time(), time.monotonic()
+        for device_id, seen in data.items():
+            if not isinstance(seen, dict) or not isinstance(seen.get("at"), (int, float)):
+                continue
+            age = now_wall - seen["at"]
+            if 0 <= age < ONLINE_ACC_WINDOW:
+                self.last_push[device_id] = now_mono - age
+                if isinstance(seen.get("acc"), bool):
+                    self.last_acc[device_id] = seen["acc"]
+
+    def _presence_snapshot(self) -> dict[str, Any]:
+        now_wall, now_mono = time.time(), time.monotonic()
+        return {
+            device_id: {"at": now_wall - (now_mono - seen), "acc": self.last_acc.get(device_id)}
+            for device_id, seen in self.last_push.items()
+        }
 
     async def async_send_command(
         self, device_id: str, command: str, message: dict[str, Any] | None = None
@@ -262,8 +323,10 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _apply_parked_location(self, device_id: str) -> None:
         """Seed a car's telemetry from its parked position in `selectCar`.
 
-        A live message always wins; this only fills what the car has not
-        pushed, so a parked car still shows on the map.
+        The newer position wins. A live message usually is newer, but the unit is
+        often online only for a few minutes at start and stop and pushes no
+        position then (2026-10-21: it parked in another city, the cloud's
+        parked position had it, and the tracker kept yesterday's live fix).
         """
         parked = parse_location_field(
             self.car(device_id).get("location"), self.coordinate_system
@@ -272,7 +335,12 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         existing = self.telemetry_fields(device_id)
         raw = (self.telemetry.get(device_id) or Telemetry(None, {})).raw
-        self.telemetry[device_id] = Telemetry(raw, {**parked, **existing})
+        if (parked.get("gps_time") or "") > (existing.get("gps_time") or ""):
+            # Both are ISO UTC strings, so they compare in time order.
+            merged = {**existing, **parked}
+        else:
+            merged = {**parked, **existing}
+        self.telemetry[device_id] = Telemetry(raw, merged)
 
     # ── telemetry push ────────────────────────────────────────────────────
 
@@ -300,8 +368,118 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             self._mqtt[device_id].start()
 
+    async def async_live(
+        self,
+        device_id: str,
+        direction: str,
+        push_url: str,
+        *,
+        take_over: bool,
+        watched: Callable[[], bool],
+        on_stop: Callable[[], Awaitable[None]],
+    ) -> bool:
+        """Make the car push `direction`; False when another camera keeps the car.
+
+        `take_over` is for someone opening this camera: whatever else is live is
+        stopped first. Without it (a dashboard still) the car is only started when it
+        is pushing nothing, so the camera cards no longer fight over the one upload.
+        `watched` tells whether the stream is being played, which holds off the idle stop;
+        `on_stop` runs when the car stops pushing this camera (the entity ends its HA
+        stream, which would otherwise retry the dead URL for hours).
+        Raises TeyesCommandError when the car cannot be reached.
+        """
+        async with self._live_locks.setdefault(device_id, asyncio.Lock()):
+            current = self.live_camera.get(device_id)
+            if current is not None and current != direction:
+                if not take_over:
+                    return False
+                await self._async_stop_live(device_id)
+            if (
+                self.live_camera.get(device_id) != direction
+                or time.monotonic() - self._live_started.get(device_id, 0) > LIVE_RESEND
+            ):
+                since_stop = time.monotonic() - self._live_stopped.get(device_id, -LIVE_SWITCH_GAP)
+                if since_stop < LIVE_SWITCH_GAP:
+                    await asyncio.sleep(LIVE_SWITCH_GAP - since_stop)
+                # The push URL from getLives plus the fields the official web app
+                # sends; without the URL the car never publishes.
+                message = {"type": direction, "name": push_url, "width": 1920,
+                           "height": 1080, "isMirror": 0, "showCameraTop": "0"}
+                try:
+                    await self.async_send_command(device_id, CMD_START_LIVE, message)
+                except TeyesCommandError:
+                    # The socket drops for a moment now and then (10-19 15:02: "not
+                    # connected" with the car online); one retry covers it.
+                    await asyncio.sleep(3)
+                    await self.async_send_command(device_id, CMD_START_LIVE, message)
+                self.live_camera[device_id] = direction
+                self._live_message[device_id] = message
+                self._live_started[device_id] = time.monotonic()
+            self._live_watched[device_id] = watched
+            self._live_on_stop[device_id] = on_stop
+            self._schedule_idle_stop(device_id)
+            return True
+
+    async def _async_resume_live(self, device_id: str) -> None:
+        message = self._live_message.get(device_id)
+        if not message or device_id not in self.live_camera:
+            return
+        async with self._live_locks.setdefault(device_id, asyncio.Lock()):
+            try:
+                await self.async_send_command(device_id, CMD_START_LIVE, message)
+                self._live_started[device_id] = time.monotonic()
+                _LOGGER.debug("Live camera of %s resumed after a drop", device_id)
+            except TeyesCommandError as err:
+                _LOGGER.debug("Could not resume live for %s: %s", device_id, err)
+
+    async def async_release_live(self, device_id: str, direction: str) -> None:
+        """Stop the push if it is this camera's (the entity is going away)."""
+        async with self._live_locks.setdefault(device_id, asyncio.Lock()):
+            if self.live_camera.get(device_id) == direction:
+                await self._async_stop_live(device_id)
+
+    async def _async_stop_live(self, device_id: str) -> None:
+        if unsub := self._live_idle.pop(device_id, None):
+            unsub()
+        current = self.live_camera.pop(device_id, None)
+        if current is None:
+            return
+        try:
+            await self.async_send_command(device_id, CMD_STOP_LIVE, {"type": current, "name": ""})
+        except TeyesCommandError:
+            pass  # offline: it is not pushing anyway
+        self._live_stopped[device_id] = time.monotonic()
+        if on_stop := self._live_on_stop.pop(device_id, None):
+            try:
+                await on_stop()
+            except Exception:  # noqa: BLE001 - never let a stream teardown block the switch
+                _LOGGER.debug("Ending the stream for %s failed", device_id, exc_info=True)
+
+    def _schedule_idle_stop(self, device_id: str) -> None:
+        """(Re)arm the idle stop; every ask pushes it out by LIVE_IDLE_STOP."""
+        if unsub := self._live_idle.pop(device_id, None):
+            unsub()
+
+        @callback
+        def _idle(_now: Any) -> None:
+            self._live_idle.pop(device_id, None)
+            watched = self._live_watched.get(device_id)
+            if watched is not None and watched():
+                self._schedule_idle_stop(device_id)
+                return
+            self.hass.async_create_task(self._async_idle_stop(device_id))
+
+        self._live_idle[device_id] = async_call_later(self.hass, LIVE_IDLE_STOP, _idle)
+
+    async def _async_idle_stop(self, device_id: str) -> None:
+        async with self._live_locks.setdefault(device_id, asyncio.Lock()):
+            if device_id not in self._live_idle:  # not re-armed by an ask meanwhile
+                await self._async_stop_live(device_id)
+
     async def async_stop_push(self) -> None:
         """Close every telemetry socket."""
+        for device_id in list(self.live_camera):
+            await self._async_stop_live(device_id)
         clients, self._mqtt = list(self._mqtt.values()), {}
         for client in clients:
             await client.async_stop()
@@ -389,6 +567,18 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     fresh.fields["acc"] = state == "on"
             merged = {**self.telemetry_fields(device_id), **fresh.fields}
             self.telemetry[device_id] = Telemetry(raw, merged)
+        back = (
+            device_id in self.live_camera
+            and time.monotonic() - self.last_push.get(device_id, 0.0) > ONLINE_PUSH_WINDOW
+        )
         self.last_push[device_id] = time.monotonic()
+        if back:
+            # Auto-renew: the car is back after a drop while one of its cameras is
+            # in use -- start it again now rather than at the next viewer request.
+            self._live_started.pop(device_id, None)
+            self.hass.async_create_task(self._async_resume_live(device_id))
+        if isinstance(acc := self.telemetry_fields(device_id).get("acc"), bool):
+            self.last_acc[device_id] = acc
+        self._presence_store.async_delay_save(self._presence_snapshot, 30)
 
         self.async_update_listeners()

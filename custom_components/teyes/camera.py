@@ -8,17 +8,23 @@ online for the URLs to carry actual video.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
 from typing import Any
 
+import aiohttp
+
 from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.stream import Stream
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import carinfo
-from .const import CAMERA_DIRECTIONS, CMD_START_LIVE, CMD_STOP_LIVE, DOMAIN
+from .const import CAMERA_DIRECTIONS, DOMAIN
 from .coordinator import TeyesCommandError, TeyesCoordinator
 from .entity import TeyesEntity
 
@@ -27,6 +33,11 @@ _LOGGER = logging.getLogger(__name__)
 # Re-fetch the play URLs once they are this old; the URL's own auth_key lasts
 # a while, but a fresh one is cheap and avoids a mid-view expiry.
 _URL_TTL = 120
+# How long a watched stream may be down (the car's link dropped) before it is ended.
+DROP_TOLERANCE = 600
+# Write the last frame to disk at most this often (it is shown while the car is offline
+# and survives restarts).
+_SAVE_EVERY = 60
 
 
 async def async_setup_entry(
@@ -59,65 +70,200 @@ class TeyesCamera(TeyesEntity, Camera):
         self._attr_translation_key = f"camera_{direction}"
         self._urls: dict[str, Any] = {}
         self._urls_at = 0.0
+        self._last_image: bytes | None = None
+        self._down_since: float | None = None
+        self._saved_at = 0.0
+
+    @property
+    def _image_path(self) -> str:
+        return self.hass.config.path(
+            ".storage", f"{DOMAIN}.{self._device_id}.{self._direction}.jpg"
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """Bring back the last frame from before a restart."""
+        await super().async_added_to_hass()
+
+        def _load() -> bytes | None:
+            try:
+                with open(self._image_path, "rb") as file:
+                    return file.read()
+            except OSError:
+                return None
+
+        self._last_image = await self.hass.async_add_executor_job(_load)
 
     @property
     def available(self) -> bool:
-        """There is only a feed to show while the car is online and streaming.
+        """Live while the car is online; offline, the last frame it sent.
 
-        Unlike the command controls, a camera has nothing to offer offline, so
-        it reads unavailable then rather than showing a broken feed.
+        With no frame yet there is nothing to show offline, so it reads
+        unavailable then rather than an empty card.
         """
-        return super().available and self.coordinator.is_online(self._device_id)
+        if not super().available:
+            return False
+        return self.coordinator.is_online(self._device_id) or self._last_image is not None
 
-    async def _async_urls(self) -> dict[str, Any]:
-        """Return fresh play URLs, telling the car to start streaming first."""
-        try:
-            await self.coordinator.async_send_command(
-                self._device_id,
-                CMD_START_LIVE,
-                {"type": self._direction, "name": ""},
-            )
-        except TeyesCommandError as err:
-            # The car is offline; ask for the URLs anyway so the entity still
-            # behaves, they simply will not carry video.
-            _LOGGER.warning("Could not start live for %s: %s", self._device_id, err)
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"live": self.coordinator.is_online(self._device_id)}
+
+    def _keep_image(self, image: bytes) -> None:
+        """Remember a frame, and write it to disk now and then."""
+        self._last_image = image
+        if time.monotonic() - self._saved_at < _SAVE_EVERY:
+            return
+        self._saved_at = time.monotonic()
+
+        def _save() -> None:
+            tmp = self._image_path + ".tmp"
+            with open(tmp, "wb") as file:
+                file.write(image)
+            os.replace(tmp, self._image_path)
+
+        self.hass.async_add_executor_job(_save)
+
+    def _watched(self) -> bool:
+        """Whether someone is playing this camera's stream right now.
+
+        A stream whose source died keeps its outputs while the worker retries (seen
+        retrying an expired URL for 6 h). A short drop is not that: the unit's link
+        comes back within minutes, so a stream that went down counts as watched for
+        DROP_TOLERANCE more -- long enough for the car to return and the start to be
+        re-sent (auto-renew) -- and only then is it ended.
+        """
+        if not (self.stream and self.stream.outputs()):
+            self._down_since = None
+            return False
+        if self.stream.available:
+            self._down_since = None
+            return True
+        if self._down_since is None:
+            self._down_since = time.monotonic()
+        return time.monotonic() - self._down_since < DROP_TOLERANCE
+
+    async def _async_end_stream(self) -> None:
+        """The car stopped pushing this camera: end the HA stream rather than let it
+        retry a dead URL. The next viewing restarts it (async_create_stream)."""
+        if self.stream is not None:
+            # Keep its last frame for the card first: the car is about to go quiet.
+            if self._watched():
+                try:
+                    if image := await self.stream.async_get_image():
+                        self._saved_at = 0.0
+                        self._keep_image(image)
+                except Exception:  # noqa: BLE001 - a missing frame must not block the stop
+                    pass
+            await self.stream.stop()
+
+    async def _async_go_live(self, *, take_over: bool) -> dict[str, Any] | None:
+        """Fetch the play URLs and get the car pushing this camera.
+
+        `lives/getLives` returns routes, each with a `push_url` (where the car must publish)
+        and the play URLs that serve that same stream; the coordinator sends the start with
+        that push URL and keeps the car on one camera at a time. Returns None when the car
+        stays on another camera (take_over=False) or cannot be reached.
+        """
         if not self._urls or (time.monotonic() - self._urls_at) > _URL_TTL:
             app_version = self.car.get("app_version") or 0
             self._urls = await self.coordinator.client.async_get_lives(
                 self._device_id, self._direction, app_version=app_version
             )
             self._urls_at = time.monotonic()
-        return self._urls
+        try:
+            live = await self.coordinator.async_live(
+                self._device_id,
+                self._direction,
+                self._urls.get("push_url") or "",
+                take_over=take_over,
+                watched=self._watched,
+                on_stop=self._async_end_stream,
+            )
+        except TeyesCommandError as err:
+            _LOGGER.warning("Could not start live for %s: %s", self._device_id, err)
+            return None
+        return self._urls if live else None
+
+    @staticmethod
+    def _source(urls: dict[str, Any] | None) -> str | None:
+        """FLV first (video within seconds of the start), HLS as the fallback."""
+        return (urls.get("flv_play_url") or urls.get("hls_play_url")) if urls else None
+
+    async def _async_wait_for_video(self, url: str, timeout: float = 20) -> None:
+        """Wait until the play URL serves video: the car takes 5-20 s to start pushing,
+        and a stream opened before that fails and only retries 10+ s later.
+
+        The CDN answers 200 at once even when nothing is being pushed and then sends no
+        body, so only actual bytes count (an FLV starts with b"FLV")."""
+        session = async_get_clientsession(self.hass)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=5, sock_read=4)
+                ) as resp:
+                    if resp.status == 200 and await resp.content.read(3):
+                        return
+            except (aiohttp.ClientError, TimeoutError):
+                pass
+            await asyncio.sleep(1)
+
+    async def async_create_stream(self) -> Stream | None:
+        """Switch the car to this camera every time someone opens it.
+
+        Home Assistant builds a camera's Stream once and reuses it, with the URL it got
+        first, for every later viewer — so without this a second viewing never asked the
+        car to start again, and played a URL whose auth key may have expired.
+        """
+        source = None
+        if self.coordinator.is_online(self._device_id):
+            source = self._source(await self._async_go_live(take_over=True))
+        if source:
+            await self._async_wait_for_video(source)
+            if self.stream is not None and self.stream.source != source:
+                self.stream.update_source(source)
+        return await super().async_create_stream()
 
     async def stream_source(self) -> str | None:
-        """The URL Home Assistant should play — HLS, falling back to FLV."""
-        urls = await self._async_urls()
-        return urls.get("hls_play_url") or urls.get("flv_play_url")
+        """The play URL, with the car switched to this camera."""
+        if not self.coordinator.is_online(self._device_id):
+            return None
+        return self._source(await self._async_go_live(take_over=True))
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """A still frame, pulled from the FLV stream with ffmpeg."""
-        urls = await self._async_urls()
-        source = urls.get("flv_play_url") or urls.get("hls_play_url")
-        if not source:
-            return None
-        try:
-            from homeassistant.components.ffmpeg import async_get_image
+        """A still frame: from the playing stream, else pulled with ffmpeg.
 
-            return await async_get_image(
-                self.hass, source, width=width, height=height
-            )
-        except Exception as err:  # noqa: BLE001 - ffmpeg may be absent/timeout
-            _LOGGER.debug("Could not grab a still for %s: %s", self.entity_id, err)
-            return None
+        A still never switches the car away from another camera, and the car offline
+        is not asked at all: both show the last frame (kept on disk across restarts),
+        so a dashboard of camera cards neither flips the car nor goes blank.
+        Frames are kept full size; Home Assistant scales them for each card.
+        """
+        if not self.coordinator.is_online(self._device_id):
+            return self._last_image
+        image = None
+        if self._watched():
+            try:
+                image = await self.stream.async_get_image()
+            except Exception:  # noqa: BLE001 - fall back to ffmpeg
+                image = None
+        if image is None:
+            source = self._source(await self._async_go_live(take_over=False))
+            if not source:
+                return self._last_image
+            try:
+                from homeassistant.components.ffmpeg import async_get_image
+
+                image = await async_get_image(self.hass, source)
+            except Exception as err:  # noqa: BLE001 - ffmpeg may be absent/timeout
+                _LOGGER.debug("Could not grab a still for %s: %s", self.entity_id, err)
+                image = None
+        if image:
+            self._keep_image(image)
+        return image or self._last_image
 
     async def async_will_remove_from_hass(self) -> None:
-        """Tell the car to stop streaming when the entity goes away."""
-        try:
-            await self.coordinator.async_send_command(
-                self._device_id, CMD_STOP_LIVE, {"type": self._direction, "name": ""}
-            )
-        except TeyesCommandError:
-            pass
+        """Stop the push if it is this camera's when the entity goes away."""
+        await self.coordinator.async_release_live(self._device_id, self._direction)
         await super().async_will_remove_from_hass()
