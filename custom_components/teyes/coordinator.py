@@ -106,6 +106,9 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # online a minute ago as offline until it next pushes.
         self.last_push: dict[str, float] = {}
         self.last_acc: dict[str, bool] = {}
+        # When the car last pushed an ignition word (wall-clock seconds, to compare
+        # with the cloud's acc_on/acc_off stamps; see binary_sensor._ignition).
+        self.acc_pushed_at: dict[str, float] = {}
         self._presence_store: Store[dict[str, Any]] = Store(
             hass, 1, f"{DOMAIN}.{entry.entry_id}.presence"
         )
@@ -565,6 +568,8 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if message_type == "acc" and "acc" not in fresh.fields:
                 if (state := body.get("type")) in ("on", "off"):
                     fresh.fields["acc"] = state == "on"
+            if "acc" in fresh.fields:
+                self.acc_pushed_at[device_id] = time.time()
             merged = {**self.telemetry_fields(device_id), **fresh.fields}
             self.telemetry[device_id] = Telemetry(raw, merged)
         back = (
