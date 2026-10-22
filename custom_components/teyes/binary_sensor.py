@@ -42,15 +42,43 @@ class TeyesBinarySensorDescription(BinarySensorEntityDescription):
     value_fn: Callable[[TeyesCoordinator, str], bool | None]
 
 
+def _epoch(value: Any) -> float | None:
+    """One of the cloud's millisecond stamps, as epoch seconds."""
+    try:
+        stamp = float(value)
+    except (TypeError, ValueError):
+        return None
+    return stamp / 1000 if stamp > 0 else None
+
+
 def _ignition(coordinator: TeyesCoordinator, device_id: str) -> bool | None:
-    """ACC state — the live message wins, else the polled state, else selectCar."""
-    telemetry = coordinator.telemetry_fields(device_id)
-    if "acc" in telemetry:
-        return telemetry["acc"]
-    for record in (coordinator.state(device_id), coordinator.car(device_id)):
+    """ACC state: the car's own push, unless the cloud heard a newer edge.
+
+    The car pushes "acc off" as it shuts down (it is still online then) but
+    rarely "acc on": it is not connected yet when the engine starts, so only the
+    cloud hears it (`acc` in the state, `acc_on` in the car record). A pushed
+    value used to win until the next restart, so drives after a pushed "off"
+    were missed (2026-10-18..22: 9 of 11, the other 2 ~4 min late). The cloud's
+    level now wins when its own stamp for that edge is newer than the push.
+    """
+    state, car = coordinator.state(device_id), coordinator.car(device_id)
+    cloud = None
+    for record in (state, car):
         if (value := _flag(record, "acc")) is not None:
-            return value
-    return None
+            cloud = value
+            break
+    telemetry = coordinator.telemetry_fields(device_id)
+    if "acc" not in telemetry:
+        return cloud
+    pushed = telemetry["acc"]
+    pushed_at = coordinator.acc_pushed_at.get(device_id)
+    if cloud is None or cloud == pushed or pushed_at is None:
+        return pushed
+    if cloud:
+        edge = _epoch(car.get("acc_on"))
+    else:
+        edge = _epoch(state.get("acc_off") or car.get("acc_off"))
+    return cloud if edge is not None and edge > pushed_at else pushed
 
 
 SENSORS: tuple[TeyesBinarySensorDescription, ...] = (
