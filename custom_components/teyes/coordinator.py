@@ -63,6 +63,8 @@ class TeyesCommandError(Exception):
 
 # Poll the app-update flag every Nth refresh (~hourly at the default interval).
 _UPDATE_EVERY = 60
+# A car list the cloud did not send is replaced by the last one for up to this long.
+CARS_STALE_SECONDS = 600
 
 
 class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -82,6 +84,7 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Per car, keyed by device id. The last car message is kept whole so an
         # unrecognised payload is still readable from diagnostics and entities.
         self.cars: dict[str, dict[str, Any]] = {}
+        self._cars_ok_at = 0.0
         self.states: dict[str, dict[str, Any]] = {}
         self.telemetry: dict[str, Telemetry] = {}
         self.last_message_at: dict[str, str] = {}
@@ -253,7 +256,14 @@ class TeyesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except TeyesAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except TeyesError as err:
+            # The cloud times out or refuses a connection now and then and
+            # answers again a minute later; failing the poll for it turned
+            # every entity unavailable and logged an error each time.
+            if self.cars and time.monotonic() - self._cars_ok_at < CARS_STALE_SECONDS:
+                _LOGGER.info("Teyes car list not read, keeping the last one: %s", err)
+                return {"cars": self.cars, "states": self.states}
             raise UpdateFailed(str(err)) from err
+        self._cars_ok_at = time.monotonic()
         self.cars = {str(car["imei"]): car for car in cars}
 
         # A selected car that has left the account simply stops updating; its
